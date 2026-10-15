@@ -8,29 +8,29 @@ from tools import (
 from scoring import score_reviewers
 
 
-def plan(pr_number: int) -> list[str]:
+def plan(pr_number: int, repo: str = "pydantic") -> list[str]:
     """Decide which tools to run."""
     return ["rank_reviewers", "bus_factor_files"]
 
 
-def run_tools(pr_number: int, planned: list[str]) -> dict:
+def run_tools(pr_number: int, planned: list[str], repo: str = "pydantic") -> dict:
     cutoff = default_cutoff()
     obs = {}
     if "rank_reviewers" in planned:
-        obs["rank_reviewers"] = score_reviewers(pr_number, cutoff)
+        obs["rank_reviewers"] = score_reviewers(pr_number, cutoff, repo=repo)
     if "bus_factor_files" in planned:
-        obs["bus_factor_files"] = bus_factor_files(cutoff)
+        obs["bus_factor_files"] = bus_factor_files(cutoff, repo=repo)
     if "critical_files" in planned:
-        obs["critical_files"] = critical_files()
+        obs["critical_files"] = critical_files(repo=repo)
     return obs
 
 
-def decide(pr_number: int, obs: dict) -> dict:
+def decide(pr_number: int, obs: dict, repo: str = "pydantic") -> dict:
     ranked = obs.get("rank_reviewers", [])
     ranked = [r for r in ranked if r["score"] >= 0.3]
     top2 = ranked[:2]
 
-    pr = get_pr(pr_number)
+    pr = get_pr(pr_number, repo=repo)
     pr_files = set(pr.get("files", []))
 
     bf = {b["path"]: b for b in obs.get("bus_factor_files", [])}
@@ -83,20 +83,20 @@ def propose_actions(pr_number: int, decision: dict) -> list[dict]:
     return actions
 
 
-def run_keystone(pr_number: int, question: str = "who should review this?") -> dict:
+def run_keystone(pr_number: int, question: str = "who should review this?", repo: str = "pydantic") -> dict:
     trace = []
-    trace.append(f"START: PR #{pr_number}, question='{question}'")
+    trace.append(f"START: PR #{pr_number} on {repo}, question='{question}'")
 
-    planned = plan(pr_number)
+    planned = plan(pr_number, repo=repo)
     trace.append(f"PLAN: {planned}")
 
-    obs = run_tools(pr_number, planned)
+    obs = run_tools(pr_number, planned, repo=repo)
     trace.append(
         f"TOOLS: rank_reviewers -> {len(obs.get('rank_reviewers', []))} candidates; "
         f"bus_factor_files -> {len(obs.get('bus_factor_files', []))} flagged files"
     )
 
-    decision = decide(pr_number, obs)
+    decision = decide(pr_number, obs, repo=repo)
     trace.append(
         f"DECIDE: picked "
         f"{[r['login'] for r in decision['reviewers']]}; "
@@ -108,6 +108,7 @@ def run_keystone(pr_number: int, question: str = "who should review this?") -> d
 
     return {
         "pr_number": pr_number,
+        "repo": repo,
         "question": question,
         "trace": trace,
         "observations": obs,

@@ -15,8 +15,8 @@ def _days_since(iso: str) -> float:
         return 999.0
 
 
-def score_reviewers(pr_number: int, cutoff_iso: str) -> list[dict]:
-    candidates = reviewer_candidates(pr_number, cutoff_iso)
+def score_reviewers(pr_number: int, cutoff_iso: str, repo: str = "pydantic") -> list[dict]:
+    candidates = reviewer_candidates(pr_number, cutoff_iso, repo)
     if not candidates:
         return []
 

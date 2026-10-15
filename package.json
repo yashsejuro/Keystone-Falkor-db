@@ -1,0 +1,9 @@
+{
+  "name": "keystone",
+  "version": "1.0.0",
+  "description": "Keystone — knowledge-risk and reviewer-routing agent built on FalkorDB",
+  "scripts": {
+    "dev": "python3 app.py",
+    "start": "python3 app.py"
+  }
+}

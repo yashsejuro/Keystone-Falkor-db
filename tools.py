@@ -1,14 +1,14 @@
 """All graph queries live here. Every function returns plain Python data."""
-from graph_client import get_graph
+from graph_client import get_graph, DEFAULT_REPO
 from datetime import datetime, timedelta, timezone
 
 
-def _rows(query, params=None):
-    g = get_graph()
+def _rows(query, params=None, repo: str = DEFAULT_REPO):
+    g = get_graph(repo)
     return g.query(query, params or {}).result_set
 
 
-def get_pr(number: int) -> dict:
+def get_pr(number: int, repo: str = DEFAULT_REPO) -> dict:
     rows = _rows(
         """
         MATCH (pr:PullRequest {number: $n})
@@ -18,7 +18,7 @@ def get_pr(number: int) -> dict:
                pr.additions, pr.deletions, pr.files_changed,
                a.login, collect(DISTINCT f.path) AS files
         """,
-        {"n": number},
+        {"n": number}, repo,
     )
     if not rows:
         return {}
@@ -31,7 +31,7 @@ def get_pr(number: int) -> dict:
     }
 
 
-def reviewer_candidates(pr_number: int, cutoff_iso: str) -> list[dict]:
+def reviewer_candidates(pr_number: int, cutoff_iso: str, repo: str = DEFAULT_REPO) -> list[dict]:
     rows = _rows(
         """
         MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)
@@ -48,7 +48,7 @@ def reviewer_candidates(pr_number: int, cutoff_iso: str) -> list[dict]:
         ORDER BY shared_files DESC, last_review DESC
         LIMIT 25
         """,
-        {"pr": pr_number, "cutoff": cutoff_iso},
+        {"pr": pr_number, "cutoff": cutoff_iso}, repo,
     )
     return [
         {"login": r[0], "shared_files": r[1],
@@ -56,7 +56,8 @@ def reviewer_candidates(pr_number: int, cutoff_iso: str) -> list[dict]:
         for r in rows
     ]
 
-def bus_factor_files(cutoff_iso: str, min_total: int = 5) -> list[dict]:
+
+def bus_factor_files(cutoff_iso: str, min_total: int = 5, repo: str = DEFAULT_REPO) -> list[dict]:
     rows = _rows(
         """
         MATCH (f:File)<-[:TOUCHES]-(pr:PullRequest)<-[:REVIEWED]-(r:Person)
@@ -70,7 +71,7 @@ def bus_factor_files(cutoff_iso: str, min_total: int = 5) -> list[dict]:
         ORDER BY total DESC
         LIMIT 30
         """,
-        {"cutoff": cutoff_iso, "min_total": min_total},
+        {"cutoff": cutoff_iso, "min_total": min_total}, repo,
     )
     return [
         {"path": r[0], "sole_reviewer": r[1], "sole_count": r[2], "total": r[3]}
@@ -78,8 +79,7 @@ def bus_factor_files(cutoff_iso: str, min_total: int = 5) -> list[dict]:
     ]
 
 
-def critical_files(limit: int = 20) -> list[dict]:
-    """Betweenness on CO_CHANGES. Falls back to TOUCHES count if graph is empty."""
+def critical_files(limit: int = 20, repo: str = DEFAULT_REPO) -> list[dict]:
     try:
         rows = _rows(
             """
@@ -89,13 +89,12 @@ def critical_files(limit: int = 20) -> list[dict]:
             ORDER BY score DESC
             LIMIT $limit
             """,
-            {"limit": limit},
+            {"limit": limit}, repo,
         )
         if rows:
             return [{"path": r[0], "score": r[1]} for r in rows]
     except Exception:
         pass
-
     rows = _rows(
         """
         MATCH (f:File)<-[:TOUCHES]-()
@@ -103,12 +102,12 @@ def critical_files(limit: int = 20) -> list[dict]:
         ORDER BY score DESC
         LIMIT $limit
         """,
-        {"limit": limit},
+        {"limit": limit}, repo,
     )
     return [{"path": r[0], "score": r[1]} for r in rows]
 
 
-def explain_path(pr_number: int, reviewer: str) -> dict:
+def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO) -> dict:
     rows = _rows(
         """
         MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)
@@ -120,7 +119,7 @@ def explain_path(pr_number: int, reviewer: str) -> dict:
         ORDER BY other.merged_at DESC
         LIMIT 20
         """,
-        {"pr": pr_number, "rev": reviewer},
+        {"pr": pr_number, "rev": reviewer}, repo,
     )
     if not rows:
         return {"reviewer": reviewer, "hops": None, "path": [], "files": [], "via_prs": []}
@@ -140,9 +139,3 @@ def explain_path(pr_number: int, reviewer: str) -> dict:
 
 def default_cutoff(days: int = 90) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-
-if __name__ == "__main__":
-    print("PR 1:", get_pr(1))
-    print("Candidates:", reviewer_candidates(1, default_cutoff()))
-    print("Critical:", critical_files(5))
