@@ -579,9 +579,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (data.is_live) {
           pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/60 text-emerald-300";
           txt.innerText = "FalkorDB Connected (" + (data.message.split('(')[1]?.replace(')', '') || 'Live') + ")";
-        } else {
-          pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-300";
-          txt.innerText = "Sandbox Graph (pydantic benchmark)";
+                } else {
+          pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-rose-950/60 border border-rose-700/60 text-rose-300";
+          txt.innerText = "FalkorDB unreachable";
         }
       } catch (err) {
         console.error("Status error", err);
@@ -1055,12 +1055,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-from sandbox_data import (
-    execute_sandbox_cypher,
-    SANDBOX_BUS_FACTOR_FILES,
-    SANDBOX_CRITICAL_FILES,
-)
-
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_index():
     return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
@@ -1076,17 +1070,13 @@ async def api_status(repo: str = DEFAULT_REPO):
             "repos": repos,
             "current_repo": repo,
             "is_live": status.get("is_live", False),
-            "message": status.get("message", "FalkorDB")
+            "message": status.get("message", "FalkorDB"),
         })
     except Exception as e:
-        return JSONResponse({
-            "nodes": 1305,
-            "edges": 3330,
-            "repos": [DEFAULT_REPO],
-            "current_repo": repo,
-            "is_live": False,
-            "message": f"Sandbox Mode: {e}"
-        })
+        return JSONResponse(
+            {"error": f"FalkorDB unavailable: {type(e).__name__}: {e}"},
+            status_code=503,
+        )
 
 @app.post("/api/investigate")
 async def api_investigate(req: Request):
@@ -1120,15 +1110,12 @@ async def api_insights(repo: str = DEFAULT_REPO):
     try:
         bf = bus_factor_files(default_cutoff(), repo=repo)
         cf = critical_files(10, repo=repo)
-        return JSONResponse({
-            "bus_factor": bf,
-            "critical_files": cf
-        })
+        return JSONResponse({"bus_factor": bf, "critical_files": cf})
     except Exception as e:
-        return JSONResponse({
-            "bus_factor": SANDBOX_BUS_FACTOR_FILES,
-            "critical_files": SANDBOX_CRITICAL_FILES[:10]
-        })
+        return JSONResponse(
+            {"error": f"FalkorDB unavailable: {type(e).__name__}: {e}"},
+            status_code=503,
+        )
 
 @app.post("/api/cypher")
 async def api_cypher(req: Request):
@@ -1149,9 +1136,6 @@ async def api_cypher(req: Request):
                     return JSONResponse({"rows": rows, "count": len(rows)})
             except Exception as e:
                 return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
-        
-        sandbox_res = execute_sandbox_cypher(query)
-        return JSONResponse(sandbox_res)
     except Exception as e:
         return JSONResponse({"error": f"Query execution failed: {e}"}, status_code=400)
 

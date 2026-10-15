@@ -6,9 +6,11 @@ from falkordb import FalkorDB
 
 load_dotenv()
 
-REPO = "fastapi/fastapi"
-GRAPH_NAME = "keystone_fastapi"
-LIMIT = 500
+import sys
+
+REPO = sys.argv[1] if len(sys.argv) > 1 else "pydantic/pydantic"
+LIMIT = int(sys.argv[2]) if len(sys.argv) > 2 else 500
+GRAPH_NAME = "keystone_" + REPO.split("/")[1]
 
 H = {
     "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
