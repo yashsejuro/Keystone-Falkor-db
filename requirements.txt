@@ -6,3 +6,6 @@ streamlit
 pyvis
 numpy
 pandas
+fastapi
+uvicorn
+groq

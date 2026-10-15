@@ -9,7 +9,8 @@ def _days_since(iso: str) -> float:
         return 999.0
     try:
         t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - t).total_seconds() / 86400.0
+        secs = (datetime.now(timezone.utc) - t).total_seconds()
+        return max(0.0, secs / 86400.0)
     except Exception:
         return 999.0
 

@@ -1,0 +1,4 @@
+{
+  "name": "Keystone",
+  "description": "A knowledge-risk and reviewer-routing agent for codebases, built on FalkorDB graph algorithms."
+}
