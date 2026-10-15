@@ -19,6 +19,8 @@ except Exception:
         return decision.get("rationale", "")
 
 app = FastAPI(title="Keystone", description="Graph-based PR Reviewer Routing & Knowledge Risk Agent")
+from inbox import router as inbox_router
+app.include_router(inbox_router)
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">

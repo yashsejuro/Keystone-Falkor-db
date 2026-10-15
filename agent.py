@@ -8,9 +8,32 @@ from tools import (
 from scoring import score_reviewers
 
 
-def plan(pr_number: int, repo: str = "pydantic") -> list[str]:
-    """Decide which tools to run."""
-    return ["rank_reviewers", "bus_factor_files"]
+def plan(pr_number: int, question: str = "who should review this?", repo: str = "pydantic") -> list[str]:
+    """Select tools based on the question. Deterministic keyword routing.
+
+    No LLM. If we add LLM routing later, this stays as the fallback path.
+    """
+    q = (question or "").lower()
+
+    critical_kw = ["critical", "central", "bridge", "betweenness", "architectural"]
+    bus_factor_kw = ["bus factor", "bus-factor", "coverage", "risk", "leaves", "leaving", "single point"]
+    reviewer_kw = ["review", "reviewer", "who should", "page", "assign"]
+
+    tools = []
+
+    if any(k in q for k in critical_kw):
+        tools.append("critical_files")
+    if any(k in q for k in bus_factor_kw):
+        tools.append("bus_factor_files")
+    if any(k in q for k in reviewer_kw) or not tools:
+        tools.insert(0, "rank_reviewers")
+
+    if "bus_factor_files" not in tools:
+        tools.append("bus_factor_files")
+    if "rank_reviewers" not in tools:
+        tools.insert(0, "rank_reviewers")
+
+    return tools
 
 
 def run_tools(pr_number: int, planned: list[str], repo: str = "pydantic") -> dict:
@@ -87,14 +110,15 @@ def run_keystone(pr_number: int, question: str = "who should review this?", repo
     trace = []
     trace.append(f"START: PR #{pr_number} on {repo}, question='{question}'")
 
-    planned = plan(pr_number, repo=repo)
+    planned = plan(pr_number, question=question, repo=repo)
     trace.append(f"PLAN: {planned}")
 
     obs = run_tools(pr_number, planned, repo=repo)
-    trace.append(
-        f"TOOLS: rank_reviewers -> {len(obs.get('rank_reviewers', []))} candidates; "
-        f"bus_factor_files -> {len(obs.get('bus_factor_files', []))} flagged files"
+    counts = ", ".join(
+        f"{k} -> {len(v) if isinstance(v, list) else 'ok'}"
+        for k, v in obs.items()
     )
+    trace.append(f"TOOLS: {counts}")
 
     decision = decide(pr_number, obs, repo=repo)
     trace.append(
@@ -119,7 +143,7 @@ def run_keystone(pr_number: int, question: str = "who should review this?", repo
 
 if __name__ == "__main__":
     import sys
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 13997
     result = run_keystone(n)
     for line in result["trace"]:
         print(line)

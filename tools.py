@@ -81,25 +81,23 @@ def bus_factor_files(cutoff_iso: str, min_total: int = 5, repo: str = DEFAULT_RE
 
 
 def critical_files(limit: int = 20, repo: str = DEFAULT_REPO) -> list[dict]:
-    try:
-        rows = _rows(
-            """
-            CALL algo.betweenness.stream('File', 'CO_CHANGES')
-            YIELD node, score
-            RETURN node.path, score
-            ORDER BY score DESC
-            LIMIT $limit
-            """,
-            {"limit": limit}, repo,
-        )
-        if rows:
-            return [{"path": r[0], "score": r[1]} for r in rows]
-    except Exception:
-        pass
+    """Top files by betweenness centrality on the CO_CHANGES subgraph.
+
+    Filters out docs and markdown, which co-change with everything and
+    would dominate the ranking without being architecturally meaningful.
+
+    No fallback. If the algorithm errors, the exception propagates.
+    """
     rows = _rows(
         """
-        MATCH (f:File)<-[:TOUCHES]-()
-        RETURN f.path, count(*) AS score
+        CALL algo.betweenness({
+            nodeLabels: ['File'],
+            relationshipTypes: ['CO_CHANGES']
+        }) YIELD node, score
+        WHERE NOT node.path STARTS WITH 'docs/'
+          AND NOT node.path STARTS WITH 'website/'
+          AND NOT node.path ENDS WITH '.md'
+        RETURN node.path, score
         ORDER BY score DESC
         LIMIT $limit
         """,
