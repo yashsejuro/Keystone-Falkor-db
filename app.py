@@ -784,10 +784,31 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       renderInteractiveNetwork(data);
     }
 
-    function approveAction(idx, action, target) {
+          async function approveAction(idx, action, target) {
       const container = document.getElementById(`act-actions-${idx}`);
-      container.innerHTML = `<span class="text-xs font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-2.5 py-1 rounded">✓ Approved (${action})</span>`;
-      logMemory(`Action Approved: ${action} &rarr; ${target}`);
+      container.innerHTML = `<span class="text-xs font-semibold text-amber-400 bg-amber-950/60 border border-amber-800 px-2.5 py-1 rounded animate-pulse">⏳ Executing on GitHub...</span>`;
+
+      const payload = { action: { action: action, on: (currentResult?.pr_number || 0) } };
+      if (action === "request_review") payload.action.who = target;
+      if (action === "add_label") payload.action.label = target;
+
+      try {
+        const res = await fetch('/api/action/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          container.innerHTML = `<span class="text-xs font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-2.5 py-1 rounded">✓ Executed on GitHub</span>`;
+          logMemory(`EXECUTED ${action} → ${target} (real GitHub API)`);
+        } else {
+          container.innerHTML = `<span class="text-xs font-semibold text-rose-400 bg-rose-950/60 border border-rose-800 px-2.5 py-1 rounded">✕ Failed: ${data.error || 'unknown'}</span>`;
+          logMemory(`FAILED ${action} → ${target}: ${data.error || ''}`);
+        }
+      } catch (err) {
+        container.innerHTML = `<span class="text-xs font-semibold text-rose-400 bg-rose-950/60 border border-rose-800 px-2.5 py-1 rounded">✕ Network error</span>`;
+      }
     }
 
     function rejectAction(idx, action, target) {
@@ -1157,6 +1178,20 @@ async def api_mcp_execute(req: Request):
             return JSONResponse({"error": f"Unknown tool: {tool_name}"}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
+
+@app.post("/api/action/execute")
+async def api_action_execute(req: Request):
+    """Execute an approved action against the sandbox repo."""
+    try:
+        body = await req.json()
+        action = body.get("action", {})
+        from actions import execute as exec_action
+        result = exec_action(action)
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+
+
 
 @app.post("/api/config")
 async def api_config(req: Request):
