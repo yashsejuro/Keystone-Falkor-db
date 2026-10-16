@@ -80,12 +80,41 @@ def _db():
     )
 
 
+def validate_repo(repo: str) -> str:
+    """Ensure the selected repository exists in the REPOS dictionary.
+
+    Raises ValueError if the repository is not recognized.
+    Returns the matching repository key.
+    """
+    if not repo or not isinstance(repo, str):
+        raise ValueError("Repository name must be a non-empty string.")
+    repo_clean = repo.strip()
+    if repo_clean in REPOS:
+        return repo_clean
+    repo_lower = repo_clean.lower()
+    if repo_lower in REPOS:
+        return repo_lower
+    available = ", ".join(sorted(REPOS.keys()))
+    raise ValueError(f"Repository '{repo}' not found in REPOS. Available repositories: {available}")
+
+
+def is_valid_repo(repo: str) -> bool:
+    """Return True if the repository exists in the REPOS dictionary, else False."""
+    try:
+        validate_repo(repo)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 @lru_cache(maxsize=8)
 def _graph_for(repo: str):
-    return _db().select_graph(REPOS.get(repo, REPOS[DEFAULT_REPO]))
+    repo_key = validate_repo(repo)
+    return _db().select_graph(REPOS[repo_key])
 
 
 def get_graph(repo: str = DEFAULT_REPO):
+    validate_repo(repo)
     return _graph_for(repo)
 
 

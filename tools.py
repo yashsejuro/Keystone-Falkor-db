@@ -1,10 +1,11 @@
 """All graph queries live here. Every function returns plain Python data.
 No synthetic fallbacks. If FalkorDB is unreachable, queries raise."""
-from graph_client import get_graph, DEFAULT_REPO
+from graph_client import get_graph, DEFAULT_REPO, validate_repo
 from datetime import datetime, timedelta, timezone
 
 
 def _rows(query, params=None, repo: str = DEFAULT_REPO):
+    validate_repo(repo)
     g = get_graph(repo)
     return g.query(query, params or {}).result_set
 
@@ -290,6 +291,32 @@ def sample_pr(repo: str = DEFAULT_REPO) -> int | None:
         repo=repo,
     )
     return rows[0][0] if rows else None
+
+
+def list_recent_prs(limit: int = 25, repo: str = DEFAULT_REPO) -> list[dict]:
+    """Return real merged pull requests from FalkorDB for the specified repository."""
+    rows = _rows(
+        """
+        MATCH (pr:PullRequest)
+        WHERE pr.merged_at IS NOT NULL
+        OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
+        OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
+        RETURN pr.number, pr.title, pr.merged_at, a.login, count(DISTINCT f) AS file_count
+        ORDER BY pr.number DESC
+        LIMIT $limit
+        """,
+        {"limit": limit}, repo=repo,
+    )
+    return [
+        {
+            "number": int(r[0]),
+            "title": str(r[1] or f"PR #{r[0]}"),
+            "merged_at": str(r[2]) if r[2] else None,
+            "author": str(r[3] or "contributor"),
+            "file_count": int(r[4] or 0),
+        }
+        for r in rows
+    ]
 
 
 def default_cutoff(days: int = 90) -> str:

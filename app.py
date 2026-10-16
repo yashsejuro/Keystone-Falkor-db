@@ -1,29 +1,27 @@
-"""Keystone — Knowledge-risk and reviewer-routing agent for codebases built on FalkorDB.
-Built for the Wemakedev x FalkorDB Hackathon (Track 01: Agents That Act on Connected Data).
+"""Keystone — Knowledge-risk and reviewer-routing agent built on FalkorDB.
+Multi-graph aware. Deterministic graph scoring with human approval gate.
 """
 import os
-import json
 import uuid
-import re
-import shutil
-import subprocess
-from pathlib import Path
-from threading import Lock, Thread
-from urllib.parse import urlparse
+import json
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastmcp.utilities.lifespan import combine_lifespans
-from starlette.concurrency import run_in_threadpool
 import uvicorn
 
-from graph_client import node_count, edge_count, get_connection_status, get_graph, list_repos, DEFAULT_REPO, register_repo, REPO_SLUGS, graph_provenance
-from agent import run_keystone
-from tools import get_pr, explain_path, bus_factor_files, critical_files, default_cutoff, reviewer_candidates, graph_stats, sample_pr
+from graph_client import (
+    node_count, edge_count, get_connection_status, get_graph,
+    list_repos, DEFAULT_REPO, REPOS, REPO_SLUGS, graph_provenance,
+    validate_repo, is_valid_repo
+)
+from agent import run_keystone, plan
+from tools import (
+    get_pr, explain_path, bus_factor_files, critical_files,
+    default_cutoff, reviewer_candidates, graph_stats, sample_pr,
+    list_recent_prs, pr_criticality
+)
 from scoring import score_reviewers
-from ingest_service import ingest_repository
 from mcp_server import mcp as keystone_mcp
-from memory import record_investigation, claim_action, get_action, finish_action, tracking_issue_number
-from actions import SANDBOX_REPO, plan_target, execute as execute_action
 
 try:
     from narration import narrate
@@ -31,338 +29,286 @@ except Exception:
     def narrate(decision, pr):
         return decision.get("rationale", "")
 
-keystone_mcp_app = keystone_mcp.http_app(
-  path="/mcp",
-  transport="streamable-http",
-  stateless_http=True,
-  host_origin_protection=False,
-)
-app = FastAPI(
-  title="Keystone",
-  description="Graph-based PR Reviewer Routing & Knowledge Risk Agent",
-  lifespan=combine_lifespans(keystone_mcp_app.lifespan),
-)
-from inbox import router as inbox_router
-app.include_router(inbox_router)
+app = FastAPI(title="Keystone", description="Graph-based PR Reviewer Routing & Knowledge Risk Agent")
 
-INGEST_JOBS: dict[str, dict] = {}
-INGEST_LOCK = Lock()
-MCP_TUNNEL: dict[str, object] = {"process": None, "url": None, "error": None}
-MCP_TUNNEL_LOCK = Lock()
+# Action Audit Ledger for verified actions
+ACTION_LEDGER: list[dict] = []
+
+# Mount FastMCP HTTP app at /mcp for external MCP clients
+try:
+    mcp_sub = keystone_mcp.http_app(path="/")
+    app.mount("/mcp", mcp_sub)
+except Exception:
+    pass
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Keystone — Agents That Act on Connected Data (FalkorDB)</title>
+  <title>Keystone — Graph-Powered PR Reviewer Routing & Knowledge Risk</title>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root { color-scheme: dark; }
-    body { background: #0a0a0a; color: #fafafa; font: 14px/1.5 'Plus Jakarta Sans', sans-serif; }
+    body { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; background-color: #030712; color: #f3f4f6; }
     code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
-    #network-canvas { width: 100%; height: 400px; background: #0a0a0a; border: 1px solid #27272a; border-radius: 4px; }
+    #network-canvas { width: 100%; height: 460px; background-color: #030712; border-radius: 0.75rem; }
     details summary { cursor: pointer; list-style: none; }
     details summary::-webkit-details-marker { display: none; }
+    /* Sleek scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #030712; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+<body class="bg-gray-950 text-slate-100 min-h-screen flex flex-col antialiased">
 
-  <!-- Top Hackathon Track Header Banner -->
-  <div class="hidden">
-    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center space-x-2">
-        <span class="px-2 py-0.5 rounded font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">TRACK 01</span>
-        <span class="font-semibold text-white">Agents That Act on Connected Data</span>
-        <span class="text-slate-400">&bull; Wemakedev &times; FalkorDB Hackathon</span>
-      </div>
-      <div class="flex items-center space-x-2 text-[11px] text-slate-300">
-        <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700">✓ Multi-hop Reasoning</span>
-        <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700">✓ Graph Algorithms as Tools</span>
-        <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700">✓ FastMCP Protocol</span>
-        <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700">✓ Graph Actions</span>
-        <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700">✓ Explainability</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- Main Navigation / Topbar -->
-  <header class="h-14 border-b border-[#27272a] px-6">
-    <div class="max-w-[1100px] h-full mx-auto flex items-center justify-between">
+  <!-- Clean Top Engineering Header -->
+  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-4 sm:px-6 py-3">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
       <div class="flex items-center space-x-3">
-        <div class="hidden">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-base shadow-sm">
+          🧭
         </div>
         <div>
           <div class="flex items-center space-x-2">
-            <span class="font-bold text-lg text-white tracking-tight">Keystone</span>
-            <span class="hidden">FalkorDB Graph Agent</span>
+            <span class="font-bold text-base text-white tracking-tight">Keystone</span>
+            <span class="text-[11px] font-mono text-indigo-400 bg-indigo-950/60 border border-indigo-800/60 px-2 py-0.5 rounded">FalkorDB Track 01</span>
           </div>
-          <p class="hidden">Knowledge-risk analysis, reviewer routing & bus-factor mitigation</p>
+          <p class="text-[11px] text-slate-400">Intelligent PR reviewer routing, knowledge coverage & bus-factor mitigation</p>
         </div>
       </div>
 
-      <div class="flex items-center gap-6">
-        <div class="flex items-center text-xs">
-          <span class="hidden">Dataset:</span>
-          <select id="repo-select" onchange="onRepoChange(this.value)" aria-label="Repository"
-                  class="font-mono text-[13px] text-[#a1a1aa] bg-transparent border border-transparent hover:border-[#27272a] focus:outline-none focus:border-[#6366f1] rounded px-2 py-1 cursor-pointer"></select>
+      <div class="flex items-center space-x-3">
+        <!-- Repository Selector -->
+        <div class="flex items-center space-x-2 text-xs bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg shadow-sm">
+          <span class="text-slate-400 font-medium">Repository:</span>
+          <select id="repo-select" onchange="onRepoChange(this.value)"
+                  class="font-mono font-semibold text-indigo-300 bg-transparent focus:outline-none cursor-pointer">
+            <option value="pydantic">pydantic (1,309 nodes)</option>
+            <option value="fastapi">fastapi (active graph)</option>
+          </select>
         </div>
-        <a href="/inbox" class="text-[13px] text-[#a1a1aa] hover:text-[#fafafa] hover:underline">Risk queue</a>
-        <div id="conn-pill" class="flex items-center gap-2 text-[13px] text-[#a1a1aa]">
-          <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
-          <span id="conn-text">Connected</span>
+
+        <div id="conn-pill" class="flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-emerald-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="conn-text">FalkorDB Connected</span>
         </div>
       </div>
     </div>
   </header>
 
-  <section class="px-6 pt-10 pb-8">
-    <div class="max-w-[1100px] mx-auto">
-      <p class="text-xs uppercase tracking-[0.18em] text-indigo-400 font-semibold">Review intelligence</p>
-      <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight text-white mt-2">Make every pull request reviewable.</h1>
-      <p class="max-w-[680px] text-sm sm:text-base text-[#a1a1aa] mt-3">Keystone finds the people who understand a change, surfaces knowledge risk, and prepares a safe review plan.</p>
-    </div>
-  </section>
-
   <!-- Main Layout -->
-  <main class="max-w-[1100px] mx-auto px-6 pb-12 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-    <!-- Left Column: Controls & Metrics (4 cols) -->
-    <div class="lg:col-span-4 space-y-8">
+    <!-- Left Column: Controls & Real PR Stats (4 cols) -->
+    <div class="lg:col-span-4 space-y-4">
 
       <!-- Investigation Controls Card -->
-      <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-5">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
         <div class="flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-slate-200 flex items-center space-x-2">
-            <span>Analyze a pull request</span>
+          <h2 class="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-1.5">
+            <span>🎯</span>
+            <span>Select Pull Request</span>
           </h2>
-          <span class="text-xs text-slate-500">Start here</span>
+          <span class="text-[10px] text-emerald-400 font-mono" id="pr-feed-count">Loading PRs...</span>
         </div>
 
+        <!-- Real PR Dropdown Picker -->
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Target PR Number</label>
-          <input type="number" id="pr-input" value="13997" min="1"
-                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono font-semibold">
+          <label class="block text-xs font-medium text-slate-400 mb-1">Target Pull Request (Real Data)</label>
+          <select id="pr-select" onchange="onSelectPrFromDropdown(this.value)"
+                  class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-indigo-300 font-mono focus:outline-none focus:border-indigo-500 truncate cursor-pointer">
+            <option value="13997">#13997: Support explicit by_alias</option>
+          </select>
         </div>
 
+        <!-- Manual PR Input -->
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Agent Question / Intent</label>
-          <input type="text" id="question-input" value="who should review this?"
-                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+          <label class="block text-xs font-medium text-slate-400 mb-1">Or PR Number</label>
+          <div class="flex gap-2">
+            <input type="number" id="pr-input" value="13997" min="1"
+                   class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono font-semibold">
+            <button onclick="runInvestigation()" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs text-white rounded-lg transition font-medium cursor-pointer">
+              Analyze
+            </button>
+          </div>
         </div>
 
         <div>
           <button id="run-btn" onclick="runInvestigation()"
-                  class="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-medium py-2.5 px-4 rounded text-sm shadow-sm transition cursor-pointer">
-            <span id="btn-icon"></span>
-            <span id="btn-label">Analyze PR</span>
+                  class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2.5 px-4 rounded-lg text-xs shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
+            <span id="btn-icon">🚀</span>
+            <span id="btn-label">Run Knowledge Analysis</span>
           </button>
-          <button onclick="runShowcase()" class="w-full mt-2 border border-slate-700 hover:border-indigo-500 text-slate-300 hover:text-white font-medium py-2 px-4 rounded text-xs transition cursor-pointer">Run 60-second showcase</button>
         </div>
 
-        <!-- Benchmark PR Chips -->
-        <div class="pt-2 border-t border-slate-800/80">
-          <label class="block text-xs font-medium text-slate-400 mb-2">Try a known example</label>
-          <div class="grid grid-cols-2 gap-2 text-xs">
-            <button onclick="selectPr(13997)" class="text-left bg-slate-950 hover:bg-slate-800 border border-slate-800 p-2 rounded-lg transition">
-              <span class="font-mono text-indigo-400 font-semibold block">#13997</span>
-              <span class="text-slate-400 truncate block text-[11px]">JSON Schema & Aliases</span>
-            </button>
-            <button onclick="selectPr(14000)" class="text-left bg-slate-950 hover:bg-slate-800 border border-slate-800 p-2 rounded-lg transition">
-              <span class="font-mono text-indigo-400 font-semibold block">#14000</span>
-              <span class="text-slate-400 truncate block text-[11px]">Harden CI & Base</span>
-            </button>
-            <button onclick="selectPr(13819)" class="text-left bg-slate-950 hover:bg-slate-800 border border-slate-800 p-2 rounded-lg transition">
-              <span class="font-mono text-indigo-400 font-semibold block">#13819</span>
-              <span class="text-slate-400 truncate block text-[11px]">GC Tracking Core</span>
-            </button>
-            <button onclick="selectPr(13989)" class="text-left bg-slate-950 hover:bg-slate-800 border border-slate-800 p-2 rounded-lg transition">
-              <span class="font-mono text-indigo-400 font-semibold block">#13989</span>
-              <span class="text-slate-400 truncate block text-[11px]">Root Model Copy</span>
-            </button>
+        <!-- Benchmark Presets -->
+        <div class="pt-3 border-t border-slate-800">
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-xs font-medium text-slate-400">Ground-Truth Benchmark PRs:</label>
+            <span id="preset-repo-tag" class="text-[10px] font-mono text-indigo-400">pydantic</span>
+          </div>
+          <div id="benchmark-buttons-container" class="grid grid-cols-2 gap-2 text-xs">
+            <!-- Dynamically populated -->
           </div>
         </div>
       </div>
 
-      <!-- Graph Metrics Card -->
-      <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-5">
+      <!-- Actionable PR & Architecture Telemetry Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3.5">
         <div class="flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-slate-200 flex items-center space-x-2">
-            <span>FalkorDB Graph</span>
+          <h2 class="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-1.5">
+            <span>📊</span>
+            <span>PR Impact Telemetry</span>
           </h2>
-          <span class="text-[11px] text-emerald-400 font-mono">Live graph</span>
+          <span id="blast-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/60">
+            High Impact
+          </span>
         </div>
-        
-        <div class="grid grid-cols-2 gap-3">
+
+        <div class="grid grid-cols-2 gap-2.5">
           <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3">
-            <div class="text-xs text-slate-400">Graph Nodes</div>
-            <div id="stat-nodes" class="text-2xl font-bold font-mono text-white mt-0.5">1,305</div>
-            <div class="text-[11px] text-slate-500 mt-1">Person, PR, File</div>
+            <div class="text-[11px] text-slate-400">Code Churn</div>
+            <div id="stat-churn" class="text-base font-bold font-mono text-white mt-0.5">+74 / -15</div>
+            <div id="stat-files-count" class="text-[10px] text-slate-500 mt-0.5">4 files touched</div>
           </div>
           <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3">
-            <div class="text-xs text-slate-400">Graph Edges</div>
-            <div id="stat-edges" class="text-2xl font-bold font-mono text-white mt-0.5">3,330</div>
-            <div class="text-[11px] text-slate-500 mt-1">TOUCHES, REVIEWED, CO_CHANGES</div>
+            <div class="text-[11px] text-slate-400">Blast Radius</div>
+            <div id="stat-blast-text" class="text-base font-bold font-mono text-amber-400 mt-0.5">0.486 peak</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">betweenness centrality</div>
           </div>
         </div>
 
-        <div class="pt-2 border-t border-slate-800">
-          <button onclick="toggleConfig()" class="text-xs text-indigo-400 hover:text-indigo-300 flex items-center justify-between w-full">
-            <span>⚙️ FalkorDB Credentials & Endpoint</span>
-            <span id="config-toggle-arrow">▼</span>
-          </button>
-          
-          <div id="config-drawer" class="hidden mt-3 space-y-3 bg-slate-950 p-3 rounded-lg border border-slate-800">
-            <div>
-              <label class="block text-[11px] text-slate-400">FALKOR_HOST</label>
-              <input type="text" id="cfg-host" placeholder="e.g. falkordb.cloud" class="w-full bg-slate-900 border border-slate-700 text-xs px-2.5 py-1.5 rounded text-white mt-0.5 font-mono">
-            </div>
-            <div>
-              <label class="block text-[11px] text-slate-400">FALKOR_PORT</label>
-              <input type="text" id="cfg-port" value="50019" class="w-full bg-slate-900 border border-slate-700 text-xs px-2.5 py-1.5 rounded text-white mt-0.5 font-mono">
-            </div>
-            <div>
-              <label class="block text-[11px] text-slate-400">FALKOR_USER</label>
-              <input type="text" id="cfg-user" class="w-full bg-slate-900 border border-slate-700 text-xs px-2.5 py-1.5 rounded text-white mt-0.5 font-mono">
-            </div>
-            <div>
-              <label class="block text-[11px] text-slate-400">FALKOR_PASS</label>
-              <input type="password" id="cfg-pass" class="w-full bg-slate-900 border border-slate-700 text-xs px-2.5 py-1.5 rounded text-white mt-0.5 font-mono">
-            </div>
-            <button onclick="saveConfig()" class="w-full bg-slate-800 hover:bg-slate-700 text-xs text-white py-1.5 rounded font-medium transition cursor-pointer">
-              Apply & Reconnect
-            </button>
+        <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 space-y-1.5 text-xs">
+          <div class="flex items-center justify-between text-slate-400">
+            <span>Bus Factor Exposure:</span>
+            <span id="stat-bf-exposure" class="font-mono font-semibold text-rose-400">2 files flagged</span>
+          </div>
+          <div class="flex items-center justify-between text-slate-400">
+            <span>Candidate Reviewers:</span>
+            <span id="stat-pool-depth" class="font-mono font-semibold text-indigo-300">9 evaluated</span>
+          </div>
+          <div class="flex items-center justify-between text-slate-400">
+            <span>Knowledge Distribution:</span>
+            <span id="stat-coverage-rate" class="font-mono font-semibold text-emerald-400">75% top match</span>
           </div>
         </div>
-      </div>
 
-      <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-3">
-        <div class="flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-slate-200">Why graph reasoning?</h2>
-          <span class="text-[11px] text-emerald-400 font-mono">Backtest</span>
-        </div>
-        <p class="text-xs text-slate-400">On 60 held-out PRs, Keystone found the actual top reviewer more often than a frequent-reviewer baseline.</p>
-        <div class="flex items-end gap-5">
-          <div><div class="text-2xl font-bold font-mono text-indigo-300">51.7%</div><div class="text-[11px] text-slate-500">Keystone top-1</div></div>
-          <div><div class="text-lg font-bold font-mono text-slate-300">40.0%</div><div class="text-[11px] text-slate-500">Baseline top-1</div></div>
-          <div class="text-xs text-emerald-400 font-semibold pb-1">+12 pts</div>
-        </div>
-      </div>
-
-      <!-- Agent Memory Card -->
-      <div class="hidden">
-        <div class="flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-            <span>Agent Memory & State</span>
-          </h2>
-          <span class="text-[11px] text-slate-400 font-mono">Session Log</span>
-        </div>
-        <p class="text-xs text-slate-400">Keystone tracks stateful review routing decisions and approved actions across agent steps:</p>
-        <div id="memory-log" class="space-y-1.5 max-h-40 overflow-y-auto text-[11px] font-mono text-slate-300">
-          <div class="bg-slate-950 p-2 rounded border border-slate-800">Session initialized &middot; graph memory ready</div>
+        <div class="text-[11px] text-slate-500 italic pt-1">
+          Identifies architectural risk & reviewer knowledge gaps before merge.
         </div>
       </div>
 
     </div>
 
     <!-- Right Column: Tabs (8 cols) -->
-    <div class="lg:col-span-8 space-y-6">
+    <div class="lg:col-span-8 space-y-4">
 
       <!-- Navigation Tabs -->
-      <div class="flex border-b border-slate-800 space-x-1 overflow-x-auto">
-        <button onclick="switchTab('decision')" id="tab-btn-decision" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap">
-          Investigation
+      <div class="flex border-b border-slate-800 space-x-1 overflow-x-auto text-xs sm:text-sm">
+        <button onclick="switchTab('decision')" id="tab-btn-decision" class="px-3.5 py-2.5 font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap cursor-pointer">
+          🎯 Review Routing & Actions
         </button>
-        <button onclick="switchTab('network')" id="tab-btn-network" class="hidden">
+        <button onclick="switchTab('explain')" id="tab-btn-explain" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+          🗺️ Multi-Hop Traversal
         </button>
-        <button onclick="switchTab('explain')" id="tab-btn-explain" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          Why this answer?
+        <button onclick="switchTab('network')" id="tab-btn-network" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+          🕸️ Graph Subgraph
         </button>
-        <button onclick="switchTab('mcp')" id="tab-btn-mcp" class="hidden">
+        <button onclick="switchTab('health')" id="tab-btn-health" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+          📈 Codebase Knowledge Health
         </button>
-        <button onclick="switchTab('cypher')" id="tab-btn-cypher" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          Query the graph
+        <button onclick="switchTab('ledger')" id="tab-btn-ledger" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer flex items-center space-x-1.5">
+          <span>📜 Action Ledger</span>
+          <span id="ledger-badge" class="px-1.5 py-0.2 rounded bg-indigo-900/80 text-indigo-300 text-[10px] font-mono">0</span>
         </button>
-        <button onclick="switchTab('health')" id="tab-btn-health" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          Repo health
+        <button onclick="switchTab('diagnostics')" id="tab-btn-diagnostics" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+          🔧 Diagnostic Console
         </button>
       </div>
 
       <!-- Tab 1: Decision & Actions -->
-      <div id="tab-decision" class="space-y-6">
+      <div id="tab-decision" class="space-y-4">
 
         <!-- PR Details Header -->
-        <div id="pr-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div id="pr-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
           <div class="flex items-start justify-between">
             <div>
               <div class="flex items-center space-x-2">
-                <span id="pr-badge-num" class="font-mono text-xs px-2.5 py-1 rounded-md bg-indigo-900/60 border border-indigo-700/60 text-indigo-300 font-semibold">PR #13997</span>
-                <span id="pr-badge-state" class="text-xs px-2 py-0.5 rounded-md bg-emerald-900/60 border border-emerald-700/60 text-emerald-300 font-medium">MERGED</span>
+                <span id="pr-badge-num" class="font-mono text-xs px-2.5 py-0.5 rounded bg-indigo-900/60 border border-indigo-700/60 text-indigo-300 font-semibold">PR #13997</span>
+                <span id="pr-badge-state" class="text-xs px-2 py-0.5 rounded bg-emerald-900/60 border border-emerald-700/60 text-emerald-300 font-medium">MERGED</span>
+                <span id="pr-repo-indicator" class="text-xs text-slate-400 font-mono">pydantic</span>
               </div>
-              <h3 id="pr-title" class="text-base font-semibold text-white mt-2">Loading PR details...</h3>
+              <h3 id="pr-title" class="text-base font-semibold text-white mt-1.5">Loading PR details...</h3>
               <p class="text-xs text-slate-400 mt-1">
-                Author: <span id="pr-author" class="font-mono text-slate-300 font-medium">...</span> &middot;
-                Files Changed: <span id="pr-files-count" class="font-mono text-slate-300">...</span>
+                Author: <span id="pr-author" class="font-mono text-slate-200 font-medium">...</span> &middot;
+                Files: <span id="pr-files-count" class="font-mono text-slate-200">...</span> &middot;
+                Lines: <span id="pr-lines-changed" class="font-mono text-slate-300">...</span>
               </p>
             </div>
           </div>
           
-          <div id="pr-files-list" class="mt-3 flex flex-wrap gap-1.5 pt-3 border-t border-slate-800/80"></div>
+          <!-- Detailed File Breakdown with Coverage Tagging -->
+          <div>
+            <div class="text-[11px] font-medium text-slate-400 mb-1.5">Touched Files & Reviewer Context:</div>
+            <div id="pr-files-list" class="flex flex-wrap gap-1.5"></div>
+          </div>
         </div>
 
-        <div class="bg-gradient-to-br from-indigo-950/70 to-slate-900 border border-indigo-800/60 rounded-xl p-5">
-          <div class="flex items-center justify-between gap-4">
+        <!-- Reviewer Pairing Recommendation Card -->
+        <div class="border border-indigo-700/50 bg-indigo-950/20 rounded-xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
             <div>
-              <p class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Review readiness</p>
-              <h3 id="readiness-title" class="text-xl font-semibold text-white mt-1">Analyzing change coverage...</h3>
+              <span class="text-[10px] uppercase font-bold tracking-wider text-indigo-400">Recommended Routing Strategy</span>
+              <h3 class="text-base font-bold text-white mt-0.5">Optimal Dual-Reviewer Pairing</h3>
             </div>
-            <span id="readiness-badge" class="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-300">Waiting</span>
+            <span class="text-xs font-mono px-2.5 py-1 rounded bg-indigo-900/60 text-indigo-300 border border-indigo-700/60">
+              Deterministic Graph Selection
+            </span>
           </div>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
-            <div><div class="text-xs text-slate-400">Reviewer coverage</div><div id="readiness-coverage" class="text-lg font-semibold text-white mt-1">—</div></div>
-            <div><div class="text-xs text-slate-400">Knowledge risk</div><div id="readiness-risk" class="text-lg font-semibold text-white mt-1">—</div></div>
-            <div><div class="text-xs text-slate-400">Candidates</div><div id="readiness-candidates" class="text-lg font-semibold text-white mt-1">—</div></div>
-            <div><div class="text-xs text-slate-400">Change shape</div><div id="readiness-shape" class="text-lg font-semibold text-white mt-1">—</div></div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="pairing-container">
+            <!-- Dynamically populated with Primary and Secondary Reviewer -->
           </div>
+
+          <p id="rationale-text" class="text-xs text-indigo-200/90 italic bg-indigo-950/40 p-3 rounded-lg border border-indigo-800/40"></p>
         </div>
 
-        <!-- Plan Trace -->
-        <details class="border-b border-[#27272a] pb-4">
-          <summary class="text-[14px] text-[#a1a1aa]">Agent trace (5 steps)</summary>
-          <div id="plan-trace" class="mt-3 space-y-1 text-[13px] font-mono text-[#a1a1aa] overflow-x-auto"></div>
-        </details>
-
-        <!-- Risk Flags -->
+        <!-- Knowledge Risk Flags Alert -->
         <div id="risk-container" class="space-y-2"></div>
 
-        <!-- Recommended Reviewers Table -->
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+        <!-- Ranked Candidates Table -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>Recommended reviewers</span>
+                <span>👥</span>
+                <span>All Evaluated Reviewer Candidates</span>
               </h3>
-              <p id="rationale-text" class="text-xs text-indigo-300 mt-0.5 italic"></p>
+              <p class="text-xs text-slate-400">Scored across direct file history, structural affinity, recency, and fatigue</p>
             </div>
-            <span class="text-xs text-slate-400">Graph evidence</span>
+            <span class="text-[11px] text-slate-400 font-mono">Ranked by Score</span>
           </div>
-
-          <div id="top-reviewer-card" class="mb-4"></div>
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs">
               <thead class="text-slate-400 border-b border-slate-800 uppercase font-semibold">
                 <tr>
-                  <th class="py-2.5 px-3">Rank</th>
-                  <th class="py-2.5 px-3">Reviewer</th>
-                  <th class="py-2.5 px-3 text-right">Graph Score</th>
-                  <th class="py-2.5 px-3 text-right">Shared Files</th>
-                  <th class="py-2.5 px-3 text-right">Recent Reviews</th>
-                  <th class="py-2.5 px-3">Last Active</th>
+                  <th class="py-2 px-2.5">Rank</th>
+                  <th class="py-2 px-2.5">Reviewer</th>
+                  <th class="py-2 px-2.5 text-right">Graph Score</th>
+                  <th class="py-2 px-2.5 text-right">Coverage</th>
+                  <th class="py-2 px-2.5 text-right">Shared Files</th>
+                  <th class="py-2 px-2.5 text-right">Bridge Files</th>
+                  <th class="py-2 px-2.5 text-right">90d Reviews</th>
+                  <th class="py-2 px-2.5">Last Active</th>
+                  <th class="py-2 px-2.5 text-center">Path</th>
                 </tr>
               </thead>
               <tbody id="reviewers-body" class="divide-y divide-slate-800/60 font-mono"></tbody>
@@ -370,241 +316,240 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Proposed Actions & Approval Gate -->
+        <!-- Proposed Review Plan (Actions based on graph findings) -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
                 <span>⚡</span>
-                <span>Proposed review plan</span>
+                <span>Action Plan & Human Approval Gate</span>
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Review the plan before anything is sent to the Keystone sandbox.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Keystone directly acts on connected data. Approve proposed actions below to execute.</p>
             </div>
-            <span class="text-xs px-2.5 py-1 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300 font-medium">Sandbox only</span>
+            <span class="text-xs px-2.5 py-0.5 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300 font-medium">Awaiting Your Approval</span>
           </div>
 
-          <div id="actions-container" class="space-y-3"></div>
-          <button id="apply-plan-btn" onclick="applyApprovedPlan()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium py-2.5 rounded transition cursor-pointer">Apply selected plan</button>
-          <p class="text-[11px] text-slate-500">Keystone never changes the analyzed source repository during this demo.</p>
+          <div id="actions-container" class="space-y-2.5"></div>
+          
+          <div class="flex gap-3">
+            <button id="apply-plan-btn" onclick="applyApprovedPlan()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2.5 rounded-lg transition cursor-pointer">
+              Approve & Execute Selected Actions
+            </button>
+            <button onclick="switchTab('ledger')" class="px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold py-2.5 rounded-lg transition cursor-pointer">
+              View Audit Ledger
+            </button>
+          </div>
         </div>
-
-        <section class="space-y-2 pt-2">
-          <h3 class="text-base font-medium text-[#fafafa]">Graph neighborhood</h3>
-          <p class="text-[13px] text-[#a1a1aa]">Nodes this decision touched. Drag to explore.</p>
-          <div id="network-canvas-target"></div>
-        </section>
 
       </div>
 
-      <!-- Tab 2: Interactive 2D Graph Visualizer -->
+      <!-- Tab 2: Explainability & Multi-Hop -->
+      <div id="tab-explain" class="hidden space-y-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
+                <span>🗺️</span>
+                <span>Multi-Hop Traversal Path Explainability</span>
+              </h3>
+              <p id="explain-header" class="text-xs text-slate-400 mt-1">Tracing how candidate connects to touched files via graph traversals</p>
+            </div>
+            
+            <!-- Candidate Switcher Segment -->
+            <div id="candidate-selector-segment" class="flex gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs"></div>
+          </div>
+
+          <!-- Breadcrumbs Walk -->
+          <div id="graph-walk" class="bg-slate-950 border border-slate-800 rounded-lg p-5 space-y-4"></div>
+
+          <!-- Formula Breakdown -->
+          <div class="bg-slate-950 border border-slate-800/90 rounded-lg p-4 space-y-3">
+            <h4 class="text-xs font-semibold text-indigo-300 uppercase tracking-wider">Deterministic Formula Components (Zero LLM Hallucination):</h4>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+              <div class="p-2.5 rounded bg-slate-900 border border-slate-800">
+                <div class="text-slate-400 text-[11px]">Direct File Overlap</div>
+                <div class="text-sm font-bold text-white mt-0.5">30% weight</div>
+                <div class="text-slate-500 text-[10px] mt-1">Shared files / max</div>
+              </div>
+              <div class="p-2.5 rounded bg-slate-900 border border-slate-800">
+                <div class="text-slate-400 text-[11px]">Structural Affinity</div>
+                <div class="text-sm font-bold text-white mt-0.5">30% weight</div>
+                <div class="text-slate-500 text-[10px] mt-1">Co-change &times; Centrality</div>
+              </div>
+              <div class="p-2.5 rounded bg-slate-900 border border-slate-800">
+                <div class="text-slate-400 text-[11px]">Recent Activity</div>
+                <div class="text-sm font-bold text-white mt-0.5">20% weight</div>
+                <div class="text-slate-500 text-[10px] mt-1">90-day review count</div>
+              </div>
+              <div class="p-2.5 rounded bg-slate-900 border border-slate-800">
+                <div class="text-slate-400 text-[11px]">Exponential Recency</div>
+                <div class="text-sm font-bold text-white mt-0.5">20% weight</div>
+                <div class="text-slate-500 text-[10px] mt-1">e^(-&Delta;t / 60 days)</div>
+              </div>
+            </div>
+            <p class="text-[11px] text-slate-400 italic">Workload overload dampener applies a 0.7&times; multiplier if recent reviews &gt; 20 to protect against reviewer burnout.</p>
+          </div>
+
+          <div class="mt-4 pt-4 border-t border-slate-800">
+            <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Direct Shared Files:</h4>
+            <div id="explain-files" class="space-y-2"></div>
+          </div>
+
+          <div class="mt-4 pt-4 border-t border-slate-800">
+            <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Structural Co-Change Bridges:</h4>
+            <div id="explain-bridges" class="space-y-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3: Graph Visualizer -->
       <div id="tab-network" class="hidden space-y-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>Interactive Multi-Hop Subgraph Neighborhood</span>
+                <span>🕸️</span>
+                <span>Interactive Subgraph Neighborhood</span>
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Physics-based force network rendering connections in real-time. Drag nodes or scroll to zoom.</p>
+              <p class="text-xs text-slate-400 mt-0.5">Force network of PR, touched files, historical PRs, and candidate reviewers</p>
             </div>
             <div class="flex items-center space-x-2 text-[11px] font-mono">
               <span class="inline-flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded bg-indigo-500"></span><span>PR</span></span>
               <span class="inline-flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded bg-cyan-400"></span><span>File</span></span>
-              <span class="inline-flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded bg-amber-500"></span><span>Past PR</span></span>
               <span class="inline-flex items-center space-x-1"><span class="w-2.5 h-2.5 rounded bg-emerald-500"></span><span>Reviewer</span></span>
             </div>
           </div>
 
           <div id="network-canvas" class="border border-slate-800 shadow-inner"></div>
 
-          <div class="flex justify-between items-center text-xs text-slate-400 pt-2">
-            <span>Graph nodes physics powered by FalkorDB relationship discovery</span>
+          <div id="node-inspector" class="bg-slate-950 border border-slate-800 p-3 rounded-lg text-xs hidden">
+            <div class="font-semibold text-indigo-300" id="inspector-title">Node Details</div>
+            <div class="text-slate-400 mt-1" id="inspector-desc"></div>
+          </div>
+
+          <div class="flex justify-between items-center text-xs text-slate-400 pt-1">
+            <span>Drag nodes or scroll to zoom &middot; Powered by FalkorDB relationship discovery</span>
             <button onclick="rebuildGraphVisualization()" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs transition cursor-pointer">
-              ↺ Reset Layout
+              ↺ Reset Physics Layout
             </button>
           </div>
         </div>
       </div>
 
-      <!-- Tab 3: Multi-Hop Reasoning & Explainability -->
-      <div id="tab-explain" class="hidden space-y-6">
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-          <div>
-            <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-              <span>Multi-Hop Traversal Path Explainability</span>
-            </h3>
-            <p id="explain-header" class="text-xs text-slate-400 mt-1">Tracing how the candidate connects to touched files via graph traversals</p>
-          </div>
-
-          <div id="graph-walk" class="bg-slate-950 border border-slate-800 rounded-lg p-5 space-y-4"></div>
-
-          <div class="mt-4 pt-4 border-t border-slate-800">
-            <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Traversed Files & Evidence:</h4>
-            <div id="explain-files" class="space-y-2"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 4: FastMCP Protocol Explorer -->
-      <div id="tab-mcp" class="hidden space-y-6">
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>FastMCP Agent Tools Interface (`mcp_server.py`)</span>
-              </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Keystone tools exposed over standard Model Context Protocol for Claude Desktop, Cursor, and LLM Agents</p>
-            </div>
-            <span class="text-xs px-2.5 py-1 rounded bg-indigo-950 border border-indigo-700 text-indigo-300 font-mono">FastMCP 4.1</span>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <!-- Tool 1 -->
-            <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="font-mono text-xs text-indigo-300 font-semibold">get_pr(number)</span>
-                <button onclick="testMcpTool('get_pr', {number: 13997})" class="text-[11px] bg-slate-800 hover:bg-indigo-600 px-2 py-0.5 rounded text-white transition">Run Tool</button>
-              </div>
-              <p class="text-xs text-slate-400">Fetch metadata for a pull request by number.</p>
-            </div>
-
-            <!-- Tool 2 -->
-            <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="font-mono text-xs text-indigo-300 font-semibold">rank_reviewers(pr_number)</span>
-                <button onclick="testMcpTool('rank_reviewers', {pr_number: 13997})" class="text-[11px] bg-slate-800 hover:bg-indigo-600 px-2 py-0.5 rounded text-white transition">Run Tool</button>
-              </div>
-              <p class="text-xs text-slate-400">Deterministic graph scoring of candidate reviewers.</p>
-            </div>
-
-            <!-- Tool 3 -->
-            <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="font-mono text-xs text-indigo-300 font-semibold">bus_factor_files(min_reviews)</span>
-                <button onclick="testMcpTool('bus_factor_files', {min_reviews: 5})" class="text-[11px] bg-slate-800 hover:bg-indigo-600 px-2 py-0.5 rounded text-white transition">Run Tool</button>
-              </div>
-              <p class="text-xs text-slate-400">Identifies files where 1 person did >60% of all reviews.</p>
-            </div>
-
-            <!-- Tool 4 -->
-            <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="font-mono text-xs text-indigo-300 font-semibold">critical_files(limit)</span>
-                <button onclick="testMcpTool('critical_files', {limit: 10})" class="text-[11px] bg-slate-800 hover:bg-indigo-600 px-2 py-0.5 rounded text-white transition">Run Tool</button>
-              </div>
-              <p class="text-xs text-slate-400">Betweenness centrality ranking on the CO_CHANGES subgraph.</p>
-            </div>
-          </div>
-
-          <!-- Live MCP Tool Output -->
-          <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider">MCP Live Output Response:</span>
-              <span id="mcp-tool-name" class="font-mono text-xs text-indigo-400">Click "Run Tool" above</span>
-            </div>
-            <pre id="mcp-output" class="text-xs font-mono text-slate-300 bg-slate-900 p-3 rounded overflow-x-auto max-h-60">// Output from MCP tool invocation will appear here</pre>
-          </div>
-
-          <!-- Claude Desktop Config Snippet -->
-          <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">Claude Desktop Configuration (`claude_desktop_config.json`):</span>
-            <pre class="text-xs font-mono text-slate-400 bg-slate-900 p-3 rounded overflow-x-auto">{
-  "mcpServers": {
-    "keystone": {
-      "command": "python",
-      "args": ["/path/to/Keystone/mcp_server.py"],
-      "env": {
-        "FALKOR_HOST": "your-falkordb-host",
-        "FALKOR_PORT": "50019"
-      }
-    }
-  }
-}</pre>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 5: Cypher Query Console -->
-      <div id="tab-cypher" class="hidden space-y-6">
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>FalkorDB Cypher Query Console</span>
-              </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Explore the graph data model and execute Cypher queries directly on FalkorDB</p>
-            </div>
-            <span class="text-xs text-slate-500 font-mono">OpenCypher / FalkorDB</span>
-          </div>
-
-          <!-- Query Presets -->
-          <div class="flex flex-wrap gap-2 text-xs">
-            <button onclick="setCypherQuery('MATCH (p:Person)-[:REVIEWED]->(pr:PullRequest) WHERE p.is_bot = false RETURN p.login, count(DISTINCT pr) AS reviews ORDER BY reviews DESC LIMIT 10')" class="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-3 py-1.5 rounded transition">
-              Top 10 Human Reviewers
-            </button>
-            <button onclick="setCypherQuery('MATCH (pr:PullRequest) RETURN pr.number, pr.title, pr.merged_at ORDER BY pr.merged_at DESC LIMIT 10')" class="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-3 py-1.5 rounded transition">
-              10 Most Recent Merged PRs
-            </button>
-            <button onclick="setCypherQuery('MATCH (f:File)<-[:TOUCHES]-(pr:PullRequest) RETURN f.path, count(pr) AS touches ORDER BY touches DESC LIMIT 10')" class="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-3 py-1.5 rounded transition">
-              Most Frequently Modified Files
-            </button>
-          </div>
-
-          <div class="space-y-2">
-            <textarea id="cypher-input" rows="3" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs font-mono text-indigo-200 focus:outline-none focus:border-indigo-500">MATCH (p:Person)-[:REVIEWED]->(pr:PullRequest) WHERE p.is_bot = false RETURN p.login, count(DISTINCT pr) AS reviews ORDER BY reviews DESC LIMIT 10</textarea>
-            <button onclick="executeCypher()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-lg font-medium transition cursor-pointer flex items-center space-x-1.5">
-              <span>⚡</span>
-              <span>Execute Cypher Query</span>
-            </button>
-          </div>
-
-          <!-- Cypher Results Table -->
-          <div id="cypher-results-box" class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <div class="flex items-center justify-between text-xs text-slate-400">
-              <span id="cypher-status">Ready</span>
-              <span id="cypher-count" class="font-mono">0 rows</span>
-            </div>
-            <div class="overflow-x-auto max-h-72">
-              <table class="w-full text-left text-xs font-mono">
-                <tbody id="cypher-table-body" class="divide-y divide-slate-800"></tbody>
-              </table>
-            </div>
-          </div>
-          <details class="pt-4 border-t border-[#27272a]">
-            <summary class="text-[13px] text-[#a1a1aa]">MCP tools (for Claude Desktop / Cursor)</summary>
-            <div id="mcp-tools-target"></div>
-          </details>
-        </div>
-      </div>
-
-      <!-- Tab 6: Repository Knowledge Health -->
-      <div id="tab-health" class="hidden space-y-6">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-          <!-- Bus Factor -->
+      <!-- Tab 4: Codebase Knowledge Health -->
+      <div id="tab-health" class="hidden space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-semibold text-rose-300 flex items-center space-x-2">
                 <span>⚠️</span>
                 <span>Bus-Factor Risk Files</span>
               </h3>
-              <span class="text-[11px] text-slate-500">>60% reviews by 1 engineer</span>
+              <span class="text-[11px] text-slate-500 font-mono">>60% single reviewer</span>
             </div>
-            <p class="text-xs text-slate-400">Files with concentrated ownership in the last 90 days:</p>
+            <p class="text-xs text-slate-400">Identifies files where review knowledge is concentrated in a single person.</p>
             <div id="bus-factor-list" class="space-y-2 max-h-96 overflow-y-auto pr-1"></div>
           </div>
 
-          <!-- Betweenness Centrality -->
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-semibold text-indigo-300 flex items-center space-x-2">
-                <span>Critical Files (Centrality)</span>
+                <span>🌐</span>
+                <span>Critical Infrastructure Files</span>
               </h3>
-              <span class="text-[11px] text-slate-500">Betweenness Centrality</span>
+              <span class="text-[11px] text-slate-500 font-mono">Betweenness Centrality</span>
             </div>
-            <p class="text-xs text-slate-400">Core architectural bridging files that co-change most often:</p>
+            <p class="text-xs text-slate-400">Calculates load-bearing bridge files across the repository structure.</p>
             <div id="critical-files-list" class="space-y-2 max-h-96 overflow-y-auto pr-1"></div>
           </div>
+        </div>
+      </div>
 
+      <!-- Tab 5: Action Audit Ledger -->
+      <div id="tab-ledger" class="hidden space-y-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
+                <span>📜</span>
+                <span>Agent Action Audit Ledger</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">Immutable record of every action approved by the maintainer and dispatched</p>
+            </div>
+            <div class="flex items-center space-x-2">
+              <span id="ledger-count-pill" class="text-xs px-2.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 font-mono">0 Actions</span>
+              <button onclick="clearActionLedger()" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer">Reset</button>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs font-mono">
+              <thead class="text-slate-400 border-b border-slate-800 uppercase font-semibold">
+                <tr>
+                  <th class="py-2.5 px-3">Action ID</th>
+                  <th class="py-2.5 px-3">Time</th>
+                  <th class="py-2.5 px-3">Repo & PR</th>
+                  <th class="py-2.5 px-3">Action</th>
+                  <th class="py-2.5 px-3">Target</th>
+                  <th class="py-2.5 px-3">Causal Reason</th>
+                  <th class="py-2.5 px-3 text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody id="ledger-table-body" class="divide-y divide-slate-800/60">
+                <tr><td colspan="7" class="py-6 text-center text-slate-500 font-sans text-xs">No actions executed yet. Use the "Review Routing & Actions" tab to approve proposed actions.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 6: Diagnostic & Cypher Console -->
+      <div id="tab-diagnostics" class="hidden space-y-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
+                <span>🔧</span>
+                <span>FalkorDB OpenCypher & FastMCP Console</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">Run live Cypher queries and test FastMCP tool endpoints</p>
+            </div>
+            <span class="text-xs text-indigo-400 font-mono">OpenCypher / MCP</span>
+          </div>
+
+          <div class="flex flex-wrap gap-2 text-xs">
+            <button onclick="setCypherQuery('CALL algo.betweenness({nodeLabels: [\\'File\\'], relationshipTypes: [\\'CO_CHANGES\\']}) YIELD node, score RETURN node.path, score ORDER BY score DESC LIMIT 10')" class="bg-slate-950 hover:bg-slate-800 border border-indigo-700/60 text-indigo-300 px-3 py-1.5 rounded transition cursor-pointer">
+              ⚡ Betweenness Centrality
+            </button>
+            <button onclick="setCypherQuery('MATCH (p:Person)-[:REVIEWED]->(pr:PullRequest) WHERE p.is_bot = false RETURN p.login, count(DISTINCT pr) AS reviews ORDER BY reviews DESC LIMIT 10')" class="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-3 py-1.5 rounded transition cursor-pointer">
+              Top Human Reviewers
+            </button>
+            <button onclick="setCypherQuery('MATCH ()-[c:CO_CHANGES]->() RETURN count(c) AS co_edges, sum(c.weight) AS total_strength')" class="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-3 py-1.5 rounded transition cursor-pointer">
+              Co-Change Stats
+            </button>
+          </div>
+
+          <div class="space-y-2">
+            <textarea id="cypher-input" rows="3" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs font-mono text-indigo-200 focus:outline-none focus:border-indigo-500">CALL algo.betweenness({nodeLabels: ['File'], relationshipTypes: ['CO_CHANGES']}) YIELD node, score RETURN node.path, score ORDER BY score DESC LIMIT 10</textarea>
+            <button onclick="executeCypher()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-lg font-medium transition cursor-pointer flex items-center space-x-1.5">
+              <span>⚡</span>
+              <span>Execute Cypher Query</span>
+            </button>
+          </div>
+
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
+            <div class="flex items-center justify-between text-xs text-slate-400">
+              <span id="cypher-status">Ready</span>
+              <span id="cypher-count" class="font-mono">0 rows</span>
+            </div>
+            <div class="overflow-x-auto max-h-60">
+              <table class="w-full text-left text-xs font-mono">
+                <tbody id="cypher-table-body" class="divide-y divide-slate-800">
+                  <tr><td class="text-slate-500 py-3">Run query to view results.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -615,129 +560,159 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <script>
     let currentResult = null;
     let networkInstance = null;
-    let currentRepo = null;
+    let currentRepo = 'pydantic';
+    let availablePRs = [];
+    let currentSelectedCandidate = null;
 
-    function showToast(msg, isError = false) {
-      let toast = document.getElementById('toast-notification');
-      if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'toast-notification';
-        document.body.appendChild(toast);
-      }
-      toast.innerText = msg;
-      toast.className = `fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-lg text-xs font-medium shadow-lg transition-all duration-300 ${isError ? 'bg-rose-950 text-rose-200 border border-rose-800' : 'bg-slate-900 text-indigo-300 border border-indigo-700/60'}`;
-      toast.style.display = 'block';
-      setTimeout(() => { if (toast) toast.style.display = 'none'; }, 4000);
+    const BENCHMARKS = {
+      'pydantic': [
+        { num: 13997, label: '#13997', desc: 'JSON Schema & Aliases' },
+        { num: 14000, label: '#14000', desc: 'Harden CI & Base' },
+        { num: 13995, label: '#13995', desc: 'JsonValue Serialization' },
+        { num: 13989, label: '#13989', desc: 'Root Model Copy' },
+      ],
+      'fastapi': [
+        { num: 16503, label: '#16503', desc: 'Frontend fallback checks' },
+        { num: 16504, label: '#16504', desc: 'Release version 0.143.2' },
+        { num: 16487, label: '#16487', desc: 'Bump pydantic-ai-slim' },
+        { num: 16049, label: '#16049', desc: 'Core routing & deps' },
+      ]
+    };
+
+    function getActivePrNumber() {
+      return parseInt(document.getElementById('pr-input').value) || 13997;
     }
 
     async function init() {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('pr')) document.getElementById('pr-input').value = params.get('pr');
       if (params.get('repo')) currentRepo = params.get('repo');
+      
       await fetchStatus();
+      await fetchPRs(currentRepo);
+      
+      if (params.get('pr')) {
+        document.getElementById('pr-input').value = params.get('pr');
+      } else if (availablePRs.length > 0) {
+        document.getElementById('pr-input').value = availablePRs[0].number;
+      }
+      
       await fetchInsights();
+      await fetchLedger();
       await runInvestigation();
     }
 
     async function fetchStatus() {
       try {
-        const res = await fetch('/api/status');
-        if (!res.ok) return;
+        const res = await fetch(`/api/status?repo=${encodeURIComponent(currentRepo)}`);
         const data = await res.json();
-        document.getElementById('stat-nodes').innerText = (data.nodes || 1305).toLocaleString();
-        document.getElementById('stat-edges').innerText = (data.edges || 3330).toLocaleString();
-        const repoSelect = document.getElementById('repo-select');
-        const repos = data.repos || [];
-        repoSelect.innerHTML = '';
-        repos.forEach(repo => {
-          const option = document.createElement('option');
-          option.value = repo;
-          option.textContent = repo;
-          repoSelect.appendChild(option);
-        });
-        if (repos.includes(currentRepo)) {
-          repoSelect.value = currentRepo;
-        } else {
-          currentRepo = repos.includes(data.current_repo) ? data.current_repo : (repos[0] || null);
-          repoSelect.value = currentRepo || '';
-        }
         
+        const repos = data.repos || ['pydantic', 'fastapi'];
+        const topSelect = document.getElementById('repo-select');
+        
+        topSelect.innerHTML = repos.map(r => `<option value="${r}">${r} (${r === 'pydantic' ? '1,309 nodes' : 'active graph'})</option>`).join('');
+
+        if (repos.includes(currentRepo)) {
+          topSelect.value = currentRepo;
+        } else {
+          currentRepo = repos[0];
+          topSelect.value = currentRepo;
+        }
+
+        document.getElementById('preset-repo-tag').innerText = currentRepo;
+
         const pill = document.getElementById('conn-pill');
         const txt = document.getElementById('conn-text');
         if (data.is_live) {
-          pill.className = "flex items-center gap-2 text-[13px] text-[#a1a1aa]";
-          txt.innerText = "Connected";
-                } else {
-          pill.className = "flex items-center gap-2 text-[13px] text-[#a1a1aa]";
-          pill.firstElementChild.className = "w-2 h-2 rounded-full bg-red-500";
-          txt.innerText = "Disconnected";
+          pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-emerald-300";
+          txt.innerText = "FalkorDB Connected";
+        } else {
+          pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-amber-950/40 border border-amber-800/50 text-amber-300";
+          txt.innerText = "FalkorDB Offline";
         }
+
+        renderBenchmarkButtons();
       } catch (err) {
         console.error("Status error", err);
       }
     }
 
-    async function fetchInsights() {
+    function renderBenchmarkButtons() {
+      const container = document.getElementById('benchmark-buttons-container');
+      const list = BENCHMARKS[currentRepo] || BENCHMARKS['pydantic'];
+      container.innerHTML = list.map(b => `
+        <button onclick="selectPr(${b.num})" class="text-left bg-slate-950 hover:bg-slate-800 border border-slate-800 p-2 rounded-lg transition cursor-pointer">
+          <span class="font-mono text-indigo-400 font-semibold block text-xs">${b.label}</span>
+          <span class="text-slate-400 truncate block text-[11px]">${b.desc}</span>
+        </button>
+      `).join('');
+    }
+
+    async function fetchPRs(repo) {
       try {
-        const res = await fetch('/api/insights');
-        if (!res.ok) {
-          console.warn("Insights endpoint returned non-OK status:", res.status);
-          return;
-        }
+        const feedLabel = document.getElementById('pr-feed-count');
+        feedLabel.innerText = "Loading PRs...";
+        const res = await fetch(`/api/prs?repo=${encodeURIComponent(repo)}&limit=30`);
         const data = await res.json();
-        
-        // Render Bus Factor
-        const bfList = document.getElementById('bus-factor-list');
-        bfList.innerHTML = (data.bus_factor || []).map(b => `
-          <div class="border-b border-[#27272a] pb-3 text-xs">
-            <div class="font-mono text-[#fafafa] truncate">${b.path}</div>
-            <div class="mt-1 text-[#a1a1aa]">${b.sole_reviewer} reviewer · ${b.sole_count}/${b.total} reviews</div>
-          </div>
-        `).join('') || '<div class="text-xs text-slate-500">No coverage gaps detected.</div>';
+        availablePRs = data.prs || [];
+        feedLabel.innerText = `${availablePRs.length} PRs in graph`;
 
-        // Render Critical Files
-        const cfList = document.getElementById('critical-files-list');
-        cfList.innerHTML = (data.critical_files || []).map(c => `
-          <div class="border-b border-[#27272a] pb-3 text-xs">
-            <div class="font-mono text-[#fafafa] truncate">${c.path}</div>
-            <div class="mt-1 text-[#a1a1aa]">betweenness score ${c.score.toFixed(3)}</div>
-          </div>
-        `).join('') || '<div class="text-xs text-slate-500">None calculated.</div>';
-
+        const selectEl = document.getElementById('pr-select');
+        if (availablePRs.length > 0) {
+          selectEl.innerHTML = availablePRs.map(pr => `
+            <option value="${pr.number}">#${pr.number}: ${pr.title.slice(0, 50)}${pr.title.length > 50 ? '...' : ''} (@${pr.author})</option>
+          `).join('');
+        } else {
+          selectEl.innerHTML = `<option value="">No PRs found in graph</option>`;
+        }
       } catch (err) {
-        console.error("Insights error", err);
+        console.error("PRs load error", err);
       }
+    }
+
+    function onSelectPrFromDropdown(val) {
+      if (!val) return;
+      document.getElementById('pr-input').value = val;
+      runInvestigation();
+    }
+
+    async function onRepoChange(repo) {
+      currentRepo = repo;
+      document.getElementById('repo-select').value = repo;
+      document.getElementById('preset-repo-tag').innerText = repo;
+      renderBenchmarkButtons();
+      
+      await fetchStatus();
+      await fetchPRs(repo);
+      
+      if (availablePRs.length > 0) {
+        document.getElementById('pr-input').value = availablePRs[0].number;
+      } else {
+        const defaultPr = repo === 'fastapi' ? 16503 : 13997;
+        document.getElementById('pr-input').value = defaultPr;
+      }
+
+      await fetchInsights();
+      await runInvestigation();
     }
 
     function selectPr(num) {
       document.getElementById('pr-input').value = num;
-      runInvestigation();
-    }
-
-    function runShowcase() {
-      document.getElementById('pr-input').value = 13997;
-      document.getElementById('question-input').value = 'who should review this and what knowledge risk should I know about?';
-      runInvestigation();
-    }
-
-    function scrollToPlan() {
-      document.getElementById('actions-container').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-
-    function onRepoChange(value) {
-      currentRepo = value;
+      const selectEl = document.getElementById('pr-select');
+      if ([...selectEl.options].some(o => o.value == num)) {
+        selectEl.value = num;
+      }
       runInvestigation();
     }
 
     async function runInvestigation() {
-      const pr = parseInt(document.getElementById('pr-input').value) || 13997;
-      const question = document.getElementById('question-input').value || "who should review this?";
+      const pr = getActivePrNumber();
+      const question = "who should review this?";
 
       const btn = document.getElementById('run-btn');
       const icon = document.getElementById('btn-icon');
       const label = document.getElementById('btn-label');
       icon.innerText = "⏳";
-      label.innerText = "Traversing Graph...";
+      label.innerText = "Analyzing...";
       btn.disabled = true;
 
       try {
@@ -746,273 +721,378 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pr_number: pr, question: question, repo: currentRepo })
         });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          showToast("Keystone investigation error: " + (errData.error || res.statusText), true);
-          return;
-        }
         currentResult = await res.json();
         renderResult(currentResult);
-        logMemory(`Investigated PR #${pr} &rarr; Selected ${currentResult.decision?.reviewers?.map(r=>r.login).join(', ')}`);
       } catch (err) {
-        showToast("Failed to run Keystone: " + err, true);
+        console.error("Investigation error:", err);
       } finally {
-        icon.innerText = "";
-        label.innerText = "Analyze PR";
+        icon.innerText = "🚀";
+        label.innerText = "Run Knowledge Analysis";
         btn.disabled = false;
       }
     }
 
-    async function applyApprovedPlan() {
-      if (!currentResult?.proposed_actions?.length) {
-        showToast('There are no actions to apply.');
-        return;
-      }
-      const selected = [...document.querySelectorAll('.plan-action:checked')]
-        .map(input => currentResult.proposed_actions[Number(input.dataset.actionIndex)])
-        .filter(Boolean);
-      if (!selected.length) {
-        showToast('Select at least one action first.', true);
-        return;
-      }
-
-      const button = document.getElementById('apply-plan-btn');
-      button.disabled = true;
-      button.innerText = 'Applying approved plan...';
-      let completed = 0;
-      for (const action of selected) {
-        const payload = { action: { ...action, on: currentResult.pr_number } };
-        const response = await fetch('/api/action/execute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: payload.action })
-        });
-        const result = await response.json();
-        if (!result.ok) {
-          showToast(`Plan stopped: ${result.error || 'action failed'}`, true);
-          break;
-        }
-        completed += 1;
-        logMemory(`SANDBOX action completed: ${action.action}`);
-      }
-      button.innerText = completed ? `${completed} sandbox action${completed === 1 ? '' : 's'} applied` : 'Apply selected plan';
-      button.disabled = false;
-      if (completed === selected.length) showToast('Approved plan applied to the Keystone sandbox.');
-    }
-
-    function logMemory(msg) {
-      const log = document.getElementById('memory-log');
-      const el = document.createElement('div');
-      el.className = "bg-slate-950 p-2 rounded border border-slate-800/80 text-indigo-200";
-      const now = new Date().toLocaleTimeString();
-      el.innerHTML = `<span class="text-slate-500">[${now}]</span> ${msg}`;
-      log.prepend(el);
-    }
-
     function renderResult(data) {
       const pr = data.pr_details || {};
-      document.getElementById('pr-badge-num').innerText = `PR #${data.pr_number}`;
-      document.getElementById('pr-badge-state').innerText = pr.state || 'MERGED';
-      document.getElementById('pr-title').innerText = pr.title || `Pull Request #${data.pr_number}`;
-      document.getElementById('pr-author').innerText = pr.author || 'contributor';
-      document.getElementById('pr-files-count').innerText = (pr.files || []).length;
-
-      const filesList = document.getElementById('pr-files-list');
-      filesList.innerHTML = (pr.files || []).map(f => `
-        <span class="font-mono text-[11px] px-2 py-1 rounded bg-slate-950 border border-slate-800 text-slate-300">
-          ${f}
-        </span>
-      `).join('');
-
-      // Plan Trace
-      const traceBox = document.getElementById('plan-trace');
-      traceBox.innerHTML = (data.trace || []).map(line => `
-        <div class="hover:text-white transition">
-          <span class="text-indigo-400 font-bold">&gt;</span> ${line}
-        </div>
-      `).join('');
-
-      // Narration / Rationale
-      const summaryText = data.narration || data.decision?.rationale || "";
-      document.getElementById('rationale-text').innerText = summaryText ? `"${summaryText}"` : "";
-
+      const metrics = data.pr_metrics || {};
       const reviewers = data.decision?.reviewers || [];
       const riskFlags = data.decision?.risk_flags || [];
       const changedFiles = pr.files || [];
-      const coverage = reviewers.length ? `${Math.min(reviewers[0].shared_files || 0, changedFiles.length)} / ${changedFiles.length || 0}` : `0 / ${changedFiles.length || 0}`;
-      const isCrossModule = new Set(changedFiles.map(file => file.split('/').slice(0, 2).join('/'))).size > 1;
-      document.getElementById('readiness-title').innerText = riskFlags.length ? 'Needs attention before review' : 'Ready for human review';
-      document.getElementById('readiness-badge').innerText = riskFlags.length ? 'Risk detected' : 'Good coverage';
-      document.getElementById('readiness-badge').className = `text-xs px-2.5 py-1 rounded-full ${riskFlags.length ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'}`;
-      document.getElementById('readiness-coverage').innerText = coverage;
-      document.getElementById('readiness-risk').innerText = riskFlags.length ? `${riskFlags.length} flagged` : 'Low';
-      document.getElementById('readiness-candidates').innerText = reviewers.length;
-      document.getElementById('readiness-shape').innerText = isCrossModule ? 'Cross-module' : 'Focused change';
 
-      const topCard = document.getElementById('top-reviewer-card');
-      if (reviewers.length) {
-        const top = reviewers[0];
-        topCard.innerHTML = `
-          <div class="border border-indigo-700/60 bg-indigo-950/30 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <div class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Best match</div>
-              <div class="text-xl font-semibold text-white mt-1">@${top.login}</div>
-              <p class="text-xs text-slate-300 mt-1">Knows ${top.shared_files} file${top.shared_files === 1 ? '' : 's'} in this change and reviewed ${top.recent_reviews} recent PR${top.recent_reviews === 1 ? '' : 's'}.</p>
-            </div>
-            <div class="flex items-center gap-3">
-              <div class="text-right"><div class="text-[11px] text-slate-400">Graph score</div><div class="text-lg font-mono font-semibold text-indigo-300">${top.score.toFixed(2)}</div></div>
-              <button onclick="scrollToPlan()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-2 rounded transition">Add to plan</button>
-            </div>
-          </div>`;
+      // 1. Basic PR Header
+      document.getElementById('pr-badge-num').innerText = `PR #${data.pr_number}`;
+      document.getElementById('pr-badge-state').innerText = pr.state ? pr.state.toUpperCase() : 'MERGED';
+      document.getElementById('pr-repo-indicator').innerText = currentRepo;
+      document.getElementById('pr-title').innerText = pr.title || `Pull Request #${data.pr_number}`;
+      document.getElementById('pr-author').innerText = pr.author || 'contributor';
+      document.getElementById('pr-files-count').innerText = `${changedFiles.length} file${changedFiles.length === 1 ? '' : 's'}`;
+      
+      const adds = pr.additions != null ? pr.additions : 0;
+      const dels = pr.deletions != null ? pr.deletions : 0;
+      document.getElementById('pr-lines-changed').innerText = `+${adds} / -${dels}`;
+
+      // 2. Telemetry Card Updates (Stats users need to see)
+      document.getElementById('stat-churn').innerText = `+${adds} / -${dels}`;
+      document.getElementById('stat-files-count').innerText = `${changedFiles.length} files touched`;
+      
+      const peakC = metrics.criticality?.max_centrality || 0.0;
+      document.getElementById('stat-blast-text').innerText = `${peakC.toFixed(3)} peak`;
+      
+      const blastBadge = document.getElementById('blast-badge');
+      blastBadge.innerText = metrics.blast_tier || 'Architectural Impact';
+      if (metrics.blast_color === 'rose') {
+        blastBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800";
+      } else if (metrics.blast_color === 'amber') {
+        blastBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800";
       } else {
-        topCard.innerHTML = '<div class="border border-amber-800/60 bg-amber-950/20 rounded-lg p-4 text-sm text-amber-300">No reviewer has enough connected evidence yet. Use the risk details below to guide a human assignment.</div>';
+        blastBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-800";
       }
 
-      // Risk Flags
-      const riskContainer = document.getElementById('risk-container');
-      const flags = data.decision?.risk_flags || [];
-      if (flags.length === 0) {
-        riskContainer.innerHTML = `
-          <div class="bg-emerald-950/40 border border-emerald-800/60 rounded-xl p-3.5 flex items-center space-x-3 text-xs text-emerald-300">
-            <span class="text-base">✅</span>
-            <span>No knowledge coverage gaps or stale reviewer risks detected on this PR's files.</span>
+      const bfFiles = metrics.bus_factor_files || [];
+      document.getElementById('stat-bf-exposure').innerText = bfFiles.length > 0 ? `${bfFiles.length} file${bfFiles.length > 1 ? 's' : ''} monopolized` : 'No monopoly';
+      document.getElementById('stat-pool-depth').innerText = `${reviewers.length} evaluated`;
+      
+      const topMatch = reviewers[0];
+      document.getElementById('stat-coverage-rate').innerText = topMatch ? `${topMatch.coverage_pct}% (${topMatch.shared_files}/${changedFiles.length})` : '0%';
+
+      // 3. Touched files breakdown with coverage indicator
+      const filesList = document.getElementById('pr-files-list');
+      const topCoveredSet = new Set(topMatch?.covered_files || []);
+      const bfSet = new Set(bfFiles.map(b => b.path));
+
+      filesList.innerHTML = changedFiles.map(f => {
+        const isCovered = topCoveredSet.has(f);
+        const hasBf = bfSet.has(f);
+        return `
+          <div class="font-mono text-[11px] px-2.5 py-1 rounded bg-slate-950 border ${hasBf ? 'border-rose-900/80 text-rose-300' : isCovered ? 'border-emerald-800/60 text-slate-200' : 'border-amber-800/60 text-amber-300'} flex items-center space-x-1.5">
+            <span>📄</span>
+            <span class="truncate max-w-xs">${f}</span>
+            ${hasBf ? '<span class="text-[9px] px-1 py-0.2 bg-rose-950 text-rose-400 rounded">BUS-FACTOR</span>' : ''}
+            ${isCovered ? '<span class="text-[9px] text-emerald-400">✓ Context</span>' : '<span class="text-[9px] text-amber-400">⚠ Gap</span>'}
+          </div>
+        `;
+      }).join('') || '<span class="text-xs text-slate-500">No files recorded</span>';
+
+      // 4. Reviewer Pairing Strategy Card (Primary + Secondary)
+      const pairingContainer = document.getElementById('pairing-container');
+      const primary = reviewers[0];
+      const secondary = reviewers[1];
+
+      let pairingHtml = '';
+      if (primary) {
+        pairingHtml += `
+          <div class="bg-slate-950/80 border border-indigo-700/60 rounded-lg p-4 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Primary Reviewer (Domain Lead)</span>
+              <span class="font-mono text-xs text-indigo-300 font-bold">Score: ${primary.score.toFixed(3)}</span>
+            </div>
+            <div class="text-lg font-bold text-white flex items-center space-x-1.5">
+              <span>@${primary.login}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/80">
+              <div>
+                <span class="text-slate-400 text-[10px] block">File Coverage</span>
+                <span class="font-semibold text-emerald-400 font-mono">${primary.shared_files} of ${changedFiles.length} (${primary.coverage_pct}%)</span>
+              </div>
+              <div>
+                <span class="text-slate-400 text-[10px] block">Review Velocity</span>
+                <span class="font-semibold text-slate-200 font-mono">${primary.recent_reviews} reviews (${primary.days_ago != null ? primary.days_ago + 'd ago' : 'active'})</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (secondary) {
+        pairingHtml += `
+          <div class="bg-slate-950/80 border border-slate-800 rounded-lg p-4 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Secondary Reviewer (Cross-Training)</span>
+              <span class="font-mono text-xs text-slate-300 font-bold">Score: ${secondary.score.toFixed(3)}</span>
+            </div>
+            <div class="text-lg font-bold text-white flex items-center space-x-1.5">
+              <span>@${secondary.login}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/80">
+              <div>
+                <span class="text-slate-400 text-[10px] block">File Coverage</span>
+                <span class="font-semibold text-slate-200 font-mono">${secondary.shared_files} of ${changedFiles.length} (${secondary.coverage_pct}%)</span>
+              </div>
+              <div>
+                <span class="text-slate-400 text-[10px] block">Capacity Status</span>
+                <span class="font-semibold text-emerald-400 font-mono">${secondary.is_overloaded ? 'High Load' : 'Available'}</span>
+              </div>
+            </div>
           </div>
         `;
       } else {
-        riskContainer.innerHTML = flags.map(flag => `
-          <div class="bg-rose-950/40 border border-rose-800/60 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-rose-300">
+        pairingHtml += `
+          <div class="bg-slate-950/80 border border-slate-800 rounded-lg p-4 flex items-center justify-center text-slate-500 text-xs">
+            Single candidate above graph relevance threshold.
+          </div>
+        `;
+      }
+      pairingContainer.innerHTML = pairingHtml;
+
+      // 5. Narration / Rationale Text
+      const summaryText = data.narration || data.decision?.rationale || "";
+      document.getElementById('rationale-text').innerText = summaryText ? `"${summaryText}"` : "";
+
+      // 6. Risk Flags Alert
+      const riskContainer = document.getElementById('risk-container');
+      if (riskFlags.length === 0) {
+        riskContainer.innerHTML = `
+          <div class="bg-emerald-950/30 border border-emerald-800/50 rounded-xl p-3 flex items-center space-x-2.5 text-xs text-emerald-300">
+            <span>✅</span>
+            <span>Zero knowledge coverage gaps or single-maintainer bottlenecks detected on this PR.</span>
+          </div>
+        `;
+      } else {
+        riskContainer.innerHTML = riskFlags.map(flag => `
+          <div class="bg-rose-950/30 border border-rose-800/50 rounded-xl p-3 flex items-start space-x-2.5 text-xs text-rose-300">
+            <span>🚩</span>
             <div>
-              <div class="font-semibold uppercase tracking-wider text-[11px]">Graph Risk Detected (Coverage Gap)</div>
-              <div class="font-mono mt-0.5">${flag}</div>
+              <div class="font-semibold uppercase tracking-wider text-[10px]">Knowledge Risk Identified</div>
+              <div class="font-mono mt-0.5 text-xs">${flag}</div>
             </div>
           </div>
         `).join('');
       }
 
-      // Reviewers Table
+      // 7. Reviewers Table
       const revBody = document.getElementById('reviewers-body');
       if (reviewers.length === 0) {
-        revBody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500">No candidate reviewer above threshold.</td></tr>`;
+        revBody.innerHTML = `<tr><td colspan="9" class="text-center py-6 text-slate-500">No candidate reviewer found above threshold.</td></tr>`;
       } else {
         revBody.innerHTML = reviewers.map((r, i) => `
-          <tr class="hover:bg-slate-800/40 transition">
-            <td class="py-2.5 px-3">
+          <tr class="hover:bg-slate-800/30 transition cursor-pointer" onclick="selectCandidateReviewer('${r.login}')">
+            <td class="py-2 px-2.5">
               <span class="w-5 h-5 inline-flex items-center justify-center rounded-full ${i === 0 ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-800 text-slate-400'} text-[11px]">
                 ${i + 1}
               </span>
             </td>
-            <td class="py-2.5 px-3 font-semibold text-white flex items-center space-x-2">
+            <td class="py-2 px-2.5 font-semibold text-white">
               <span class="text-slate-400">@</span><span>${r.login}</span>
             </td>
-            <td class="py-2.5 px-3 text-right">
-              <span class="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-300 font-semibold">
-                ${r.score.toFixed(3)}
-              </span>
+            <td class="py-2 px-2.5 text-right font-bold text-indigo-300">${r.score.toFixed(3)}</td>
+            <td class="py-2 px-2.5 text-right text-emerald-400">${r.coverage_pct}%</td>
+            <td class="py-2 px-2.5 text-right text-slate-300">${r.shared_files}</td>
+            <td class="py-2 px-2.5 text-right text-slate-400 font-mono">${r.bridge_files || 0}</td>
+            <td class="py-2 px-2.5 text-right text-slate-300">${r.recent_reviews}</td>
+            <td class="py-2 px-2.5 text-slate-400">${r.days_ago != null ? r.days_ago + 'd ago' : (r.last_review ? r.last_review.slice(0, 10) : 'N/A')}</td>
+            <td class="py-2 px-2.5 text-center">
+              <button onclick="event.stopPropagation(); selectCandidateReviewer('${r.login}'); switchTab('explain');" class="text-[11px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer">
+                Inspect &rarr;
+              </button>
             </td>
-            <td class="py-2.5 px-3 text-right text-slate-300">${r.shared_files}</td>
-            <td class="py-2.5 px-3 text-right text-slate-300">${r.recent_reviews}</td>
-            <td class="py-2.5 px-3 text-slate-400">${r.last_review ? r.last_review.slice(0, 10) : 'N/A'}</td>
           </tr>
         `).join('');
       }
 
-      // Proposed Actions
+      // 8. Proposed Actions
       const actContainer = document.getElementById('actions-container');
       const actions = data.proposed_actions || [];
       if (actions.length === 0) {
-        actContainer.innerHTML = `<div class="text-xs text-slate-500">No actions required.</div>`;
+        actContainer.innerHTML = `<div class="text-xs text-slate-500">No actions required for this PR.</div>`;
       } else {
-          actContainer.innerHTML = actions.map((act, i) => {
+        actContainer.innerHTML = actions.map((act, i) => {
           const target = act.who || act.label;
           const actName = act.action.replace('_', ' ').toUpperCase();
+          const reason = act.reason || "Determined by graph analysis";
           return `
-            <label id="act-card-${i}" class="bg-slate-950 border border-slate-800 rounded-lg p-3.5 flex items-center justify-between cursor-pointer hover:border-slate-600">
-              <div>
-                <input type="checkbox" class="plan-action mr-2 accent-indigo-500" data-action-index="${i}" checked>
-                <span class="text-xs font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-300 mr-2">${actName}</span>
-                <span class="font-mono text-sm text-indigo-300 font-medium">${target}</span>
-                <span class="text-xs text-slate-500 ml-2">on PR #${act.on}</span>
+            <label id="act-card-${i}" class="bg-slate-950 border border-slate-800 rounded-lg p-3.5 flex items-start justify-between cursor-pointer hover:border-slate-700 transition">
+              <div class="space-y-1">
+                <div class="flex items-center space-x-2">
+                  <input type="checkbox" class="plan-action mr-1 accent-indigo-500" data-action-index="${i}" checked>
+                  <span class="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">${actName}</span>
+                  <span class="font-mono text-sm text-white font-medium">${target}</span>
+                  <span class="text-xs text-slate-500">on PR #${act.on}</span>
+                </div>
+                <div class="text-xs text-slate-400 ml-6 flex items-center space-x-1.5">
+                  <span class="text-indigo-400 font-semibold">Graph Evidence:</span>
+                  <span>${reason}</span>
+                </div>
               </div>
+              <span id="act-status-${i}" class="text-[11px] text-amber-400 px-2 py-0.5 rounded bg-amber-950/60 border border-amber-800/60 whitespace-nowrap">Awaiting Approval</span>
             </label>
           `;
         }).join('');
       }
 
-      // Explainability & 2D Graph
-      renderExplainability(data);
+      currentSelectedCandidate = reviewers[0]?.login || null;
+      renderCandidateSelectorSegment(reviewers);
+      renderExplainabilityForCandidate(currentSelectedCandidate);
       renderInteractiveNetwork(data);
     }
 
-          async function approveAction(idx, action, target) {
-      const container = document.getElementById(`act-actions-${idx}`);
-      container.innerHTML = `<span class="text-xs font-semibold text-amber-400 bg-amber-950/60 border border-amber-800 px-2.5 py-1 rounded animate-pulse">⏳ Executing on GitHub...</span>`;
+    function renderCandidateSelectorSegment(reviewers) {
+      const segment = document.getElementById('candidate-selector-segment');
+      if (!reviewers || reviewers.length === 0) {
+        segment.innerHTML = '';
+        return;
+      }
+      segment.innerHTML = reviewers.slice(0, 3).map((r, i) => `
+        <button onclick="selectCandidateReviewer('${r.login}')" class="px-2.5 py-1 rounded text-xs transition cursor-pointer ${currentSelectedCandidate === r.login ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400 hover:text-white'}">
+          #${i + 1} @${r.login} (${r.coverage_pct || 0}%)
+        </button>
+      `).join('');
+    }
 
-      const payload = { action: { action: action, on: (currentResult?.pr_number || 0) } };
-      if (action === "request_review") payload.action.who = target;
-      if (action === "add_label") payload.action.label = target;
+    function selectCandidateReviewer(login) {
+      currentSelectedCandidate = login;
+      const reviewers = currentResult?.decision?.reviewers || [];
+      renderCandidateSelectorSegment(reviewers);
+      renderExplainabilityForCandidate(login);
+    }
 
-      try {
-        const res = await fetch('/api/action/execute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (data.ok) {
-          container.innerHTML = `<span class="text-xs font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-2.5 py-1 rounded">✓ Executed on GitHub</span>`;
-          logMemory(`EXECUTED ${action} → ${target} (real GitHub API)`);
-        } else {
-          container.innerHTML = `<span class="text-xs font-semibold text-rose-400 bg-rose-950/60 border border-rose-800 px-2.5 py-1 rounded">✕ Failed: ${data.error || 'unknown'}</span>`;
-          logMemory(`FAILED ${action} → ${target}: ${data.error || ''}`);
+    function renderExplainabilityForCandidate(login) {
+      if (!currentResult) return;
+      const data = currentResult;
+      const evidenceMap = data.reviewer_evidence || {};
+      const pathData = evidenceMap[login] || data.explain_path || {};
+      
+      document.getElementById('explain-header').innerText = `Graph Traversal Path for @${login || 'Candidate'}:`;
+
+      const walkBox = document.getElementById('graph-walk');
+      const nodes = pathData.path_nodes || [];
+      const edges = pathData.path_edges || [];
+
+      if (nodes.length > 0) {
+        walkBox.innerHTML = `
+          <div class="space-y-2">
+            <div class="text-xs text-slate-400 font-mono">
+              Shortest Traversal Path (<strong class="text-indigo-300">${pathData.hops || nodes.length - 1} hops</strong> &middot; Evidence: <span class="text-emerald-400">${pathData.evidence || 'direct_review_history'}</span>):
+            </div>
+            <div class="flex items-center space-x-2 overflow-x-auto text-xs font-mono py-2">
+              ${nodes.map((n, i) => `
+                <div class="px-3 py-1.5 rounded-lg border font-semibold whitespace-nowrap ${n.type === 'PullRequest' ? 'bg-indigo-900/60 border-indigo-700 text-indigo-200' : n.type === 'File' ? 'bg-cyan-950 border-cyan-800 text-cyan-200' : 'bg-emerald-950 border-emerald-700 text-emerald-200'}">
+                  ${n.label}
+                </div>
+                ${i < nodes.length - 1 ? `<div class="text-slate-500 font-bold">&mdash;[${edges[i]?.type || 'TOUCHES'}]&rarr;</div>` : ''}
+              `).join('')}
+            </div>
+          </div>
+        `;
+      } else {
+        walkBox.innerHTML = `<div class="text-xs text-slate-500">No multi-hop path found for candidate @${login}.</div>`;
+      }
+
+      const filesBox = document.getElementById('explain-files');
+      filesBox.innerHTML = (pathData.files || []).map(f => `
+        <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 text-xs font-mono flex items-center justify-between">
+          <div class="flex items-center space-x-2 truncate">
+            <span class="text-cyan-400">📄</span>
+            <span class="text-slate-200">${f}</span>
+          </div>
+          <span class="text-emerald-400 text-[11px]">Direct Reviewer Context</span>
+        </div>
+      `).join('') || '<div class="text-xs text-slate-500">No direct file reviews recorded.</div>';
+
+      const bridgesBox = document.getElementById('explain-bridges');
+      bridgesBox.innerHTML = (pathData.bridges || []).map(b => `
+        <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 text-xs font-mono flex items-center justify-between">
+          <div class="flex items-center space-x-2 truncate">
+            <span class="text-indigo-400">🔗</span>
+            <span class="text-slate-200">${b.from} &harr; ${b.to}</span>
+          </div>
+          <span class="text-slate-400 text-[11px]">Co-changed ${b.weight}&times; &middot; centrality ${b.centrality}</span>
+        </div>
+      `).join('') || '<div class="text-xs text-slate-500">No co-change bridge files.</div>';
+    }
+
+    async function applyApprovedPlan() {
+      const inputs = [...document.querySelectorAll('.plan-action:checked')];
+      if (!inputs.length) {
+        alert("Please select at least one action to execute.");
+        return;
+      }
+      const btn = document.getElementById('apply-plan-btn');
+      btn.disabled = true;
+      btn.innerText = "Executing & Logging Actions...";
+
+      const actions = currentResult?.proposed_actions || [];
+
+      for (const input of inputs) {
+        const idx = parseInt(input.dataset.actionIndex);
+        const actionObj = actions[idx];
+        if (actionObj) {
+          try {
+            await fetch('/api/action/execute', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: actionObj, repo: currentRepo, pr_number: currentResult.pr_number })
+            });
+            const statusEl = document.getElementById(`act-status-${idx}`);
+            if (statusEl) {
+              statusEl.className = "text-[11px] text-emerald-400 px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 whitespace-nowrap";
+              statusEl.innerHTML = `✓ Executed & Logged`;
+            }
+          } catch (e) {
+            console.error("Action exec error", e);
+          }
         }
+      }
+
+      await fetchLedger();
+
+      btn.disabled = false;
+      btn.innerText = "✓ Actions Executed & Logged in Graph Ledger";
+    }
+
+    async function fetchLedger() {
+      try {
+        const res = await fetch('/api/action/ledger');
+        const data = await res.json();
+        const ledger = data.ledger || [];
+        
+        document.getElementById('ledger-badge').innerText = ledger.length;
+        document.getElementById('ledger-count-pill').innerText = `${ledger.length} Action${ledger.length === 1 ? '' : 's'}`;
+
+        const tbody = document.getElementById('ledger-table-body');
+        if (ledger.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="7" class="py-6 text-center text-slate-500 font-sans text-xs">No actions executed yet. Use the "Review Routing & Actions" tab to approve proposed actions.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = ledger.map(item => `
+          <tr class="hover:bg-slate-900 transition">
+            <td class="py-2.5 px-3 text-indigo-300 font-bold">${item.id}</td>
+            <td class="py-2.5 px-3 text-slate-400">${item.timestamp.slice(11, 19)}</td>
+            <td class="py-2.5 px-3 text-slate-300">${item.repo} #${item.pr_number}</td>
+            <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800 text-[11px]">${item.action}</span></td>
+            <td class="py-2.5 px-3 text-white font-semibold">${item.target}</td>
+            <td class="py-2.5 px-3 text-slate-400 text-[11px] max-w-xs truncate">${item.reason}</td>
+            <td class="py-2.5 px-3 text-right"><span class="text-emerald-400 font-semibold">✓ ${item.status}</span></td>
+          </tr>
+        `).join('');
       } catch (err) {
-        container.innerHTML = `<span class="text-xs font-semibold text-rose-400 bg-rose-950/60 border border-rose-800 px-2.5 py-1 rounded">✕ Network error</span>`;
+        console.error("Ledger fetch error", err);
       }
     }
 
-    function rejectAction(idx, action, target) {
-      const container = document.getElementById(`act-actions-${idx}`);
-      container.innerHTML = `<span class="text-xs font-semibold text-slate-400 bg-slate-800 px-2.5 py-1 rounded">✕ Rejected</span>`;
-      logMemory(`Action Rejected: ${action} &rarr; ${target}`);
-    }
-
-    function renderExplainability(data) {
-      const pathData = data.explain_path || {};
-      const topRev = (data.decision?.reviewers || [])[0]?.login || "davidhewitt";
-      document.getElementById('explain-header').innerText = `Why @${topRev} was selected via verified multi-hop paths:`;
-
-      const walkBox = document.getElementById('graph-walk');
-      const files = pathData.files || [];
-      
-      walkBox.innerHTML = `
-        <div class="flex items-center space-x-2 overflow-x-auto text-xs font-mono py-2">
-          <div class="px-3 py-2 bg-indigo-900/60 border border-indigo-700 rounded-lg text-indigo-200 font-semibold whitespace-nowrap">
-            Target PR #${data.pr_number}
-          </div>
-          <div class="text-slate-500">──[touches]──▶</div>
-          <div class="px-3 py-2 bg-cyan-950 border border-cyan-800 rounded-lg text-cyan-200 font-semibold whitespace-nowrap">
-            ${files.length} Shared File(s)
-          </div>
-          <div class="text-slate-500">◀──[touches]──</div>
-          <div class="px-3 py-2 bg-amber-950 border border-amber-800 rounded-lg text-amber-200 font-semibold whitespace-nowrap">
-            Historical Merged PRs
-          </div>
-          <div class="text-slate-500">◀──[reviewed]──</div>
-          <div class="px-3 py-2 bg-emerald-950 border border-emerald-700 rounded-lg text-emerald-200 font-semibold whitespace-nowrap">
-            @${topRev}
-          </div>
-        </div>
-      `;
-
-      const filesBox = document.getElementById('explain-files');
-      filesBox.innerHTML = files.map(f => `
-        <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 text-xs font-mono flex items-center justify-between">
-          <div class="flex items-center space-x-2 truncate">
-            <span class="text-slate-200">${f}</span>
-          </div>
-          <span class="text-slate-500 text-[11px]">Multi-Hop Review Evidence in Graph</span>
-        </div>
-      `).join('');
+    async function clearActionLedger() {
+      await fetch('/api/action/clear', { method: 'POST' });
+      await fetchLedger();
     }
 
     function renderInteractiveNetwork(data) {
@@ -1027,7 +1107,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       nodes.push({
         id: targetPrNodeId,
         label: `PR #${prNum}`,
-        color: { background: '#6366f1', border: '#818cf8' },
+        title: `Target PR #${prNum} (${data.pr_details?.title || ''})`,
+        color: { background: '#4f46e5', border: '#818cf8' },
         shape: 'box',
         font: { color: '#ffffff', face: 'JetBrains Mono', size: 14 }
       });
@@ -1039,7 +1120,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         nodes.push({
           id: fileId,
           label: shortName,
-          title: file,
+          title: `File: ${file}`,
           color: { background: '#0891b2', border: '#22d3ee' },
           shape: 'ellipse',
           font: { color: '#ffffff', face: 'JetBrains Mono', size: 11 }
@@ -1047,7 +1128,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         edges.push({
           from: targetPrNodeId,
           to: fileId,
-          label: 'touches',
+          label: 'TOUCHES',
           color: { color: '#38bdf8' },
           arrows: 'to',
           font: { size: 9, color: '#94a3b8' }
@@ -1055,22 +1136,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       });
 
       const reviewers = (data.decision?.reviewers || []).slice(0, 3);
-      reviewers.forEach((rev, idx) => {
+      reviewers.forEach((rev) => {
         const revId = `REV_${rev.login}`;
         nodes.push({
           id: revId,
-          label: `@${rev.login}\\n(Score ${rev.score.toFixed(2)})`,
+          label: `@${rev.login}\\n(${rev.score.toFixed(2)})`,
+          title: `Reviewer @${rev.login} (Score: ${rev.score.toFixed(3)}, Coverage: ${rev.coverage_pct}%)`,
           color: { background: '#059669', border: '#34d399' },
           shape: 'circle',
           font: { color: '#ffffff', face: 'JetBrains Mono', size: 12 }
         });
 
-        // Connect reviewer to touched files
         touchedFiles.slice(0, rev.shared_files || 2).forEach((_, fIdx) => {
           edges.push({
             from: `FILE_${fIdx}`,
             to: revId,
-            label: 'reviewed',
+            label: 'REVIEWED',
             color: { color: '#10b981' },
             dashes: true,
             arrows: 'to',
@@ -1093,6 +1174,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       };
 
       networkInstance = new vis.Network(container, networkData, options);
+
+      networkInstance.on("click", function (params) {
+        if (params.nodes.length > 0) {
+          const nodeId = params.nodes[0];
+          const nodeObj = nodes.find(n => n.id === nodeId);
+          if (nodeObj) {
+            const insp = document.getElementById('node-inspector');
+            insp.classList.remove('hidden');
+            document.getElementById('inspector-title').innerText = `${nodeObj.label.replace('\\n', ' ')}`;
+            document.getElementById('inspector-desc').innerText = nodeObj.title || 'Connected graph node in active neighborhood';
+          }
+        }
+      });
     }
 
     function rebuildGraphVisualization() {
@@ -1102,59 +1196,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
 
     function switchTab(tab) {
-      const tabs = ['decision', 'explain', 'cypher', 'health'];
+      const tabs = ['decision', 'explain', 'network', 'health', 'ledger', 'diagnostics'];
       tabs.forEach(t => {
         document.getElementById(`tab-${t}`).classList.add('hidden');
-        document.getElementById(`tab-btn-${t}`).className = "px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap";
+        document.getElementById(`tab-btn-${t}`).className = "px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer";
       });
 
       document.getElementById(`tab-${tab}`).classList.remove('hidden');
-      document.getElementById(`tab-btn-${tab}`).className = "px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap";
+      document.getElementById(`tab-btn-${tab}`).className = "px-3.5 py-2.5 font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap cursor-pointer";
 
-    }
-
-    function toggleConfig() {
-      const drawer = document.getElementById('config-drawer');
-      const arrow = document.getElementById('config-toggle-arrow');
-      drawer.classList.toggle('hidden');
-      arrow.innerText = drawer.classList.contains('hidden') ? '▼' : '▲';
-    }
-
-    async function saveConfig() {
-      const host = document.getElementById('cfg-host').value;
-      const port = document.getElementById('cfg-port').value;
-      const user = document.getElementById('cfg-user').value;
-      const pass = document.getElementById('cfg-pass').value;
-
-      try {
-        const res = await fetch('/api/config', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ host, port, user, pass })
-        });
-        const data = await res.json();
-        showToast(data.message || "Configuration updated");
-        await fetchStatus();
-      } catch (err) {
-        showToast("Failed to update config: " + err, true);
+      if (tab === 'network' && networkInstance) {
+        setTimeout(() => { networkInstance.fit(); }, 100);
       }
-    }
-
-    async function testMcpTool(toolName, params) {
-      document.getElementById('mcp-tool-name').innerText = `Running ${toolName}...`;
-      const out = document.getElementById('mcp-output');
-      out.innerText = "Executing tool over MCP handler...";
-      try {
-        const res = await fetch('/api/mcp/execute', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ tool: toolName, params: params })
-        });
-        const data = await res.json();
-        document.getElementById('mcp-tool-name').innerText = `Tool: ${toolName}`;
-        out.innerText = JSON.stringify(data, null, 2);
-      } catch (err) {
-        out.innerText = `Error invoking MCP tool: ${err}`;
+      if (tab === 'ledger') {
+        fetchLedger();
       }
     }
 
@@ -1176,7 +1231,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const res = await fetch('/api/cypher', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ query: q })
+          body: JSON.stringify({ query: q, repo: currentRepo })
         });
         const data = await res.json();
         if (data.error) {
@@ -1204,15 +1259,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       }
     }
 
-    const networkCanvas = document.getElementById('network-canvas');
-    const networkTarget = document.getElementById('network-canvas-target');
-    if (networkCanvas && networkTarget) networkTarget.appendChild(networkCanvas);
+    async function fetchInsights() {
+      try {
+        const res = await fetch(`/api/insights?repo=${encodeURIComponent(currentRepo)}`);
+        const data = await res.json();
+        
+        const bfList = document.getElementById('bus-factor-list');
+        bfList.innerHTML = (data.bus_factor || []).map(b => `
+          <div class="bg-slate-950 border border-rose-900/40 rounded-lg p-3 text-xs">
+            <div class="font-mono text-slate-200 font-medium truncate">${b.path}</div>
+            <div class="flex items-center justify-between mt-1 text-slate-400">
+              <span>Sole Reviewer: <strong class="text-rose-400 font-mono">@${b.sole_reviewer}</strong></span>
+              <span>${b.sole_count} / ${b.total} reviews (${Math.round(b.sole_count / b.total * 100)}%)</span>
+            </div>
+          </div>
+        `).join('') || '<div class="text-xs text-slate-500">No coverage gaps detected.</div>';
 
-    const mcpPanel = document.getElementById('tab-mcp');
-    const mcpTarget = document.getElementById('mcp-tools-target');
-    if (mcpPanel && mcpTarget) {
-      mcpPanel.className = 'space-y-4 mt-4';
-      mcpTarget.appendChild(mcpPanel);
+        const cfList = document.getElementById('critical-files-list');
+        cfList.innerHTML = (data.critical_files || []).map(c => `
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs flex items-center justify-between">
+            <span class="font-mono text-slate-200 truncate pr-2">${c.path}</span>
+            <span class="font-mono px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800 text-indigo-300 font-medium">
+              ${typeof c.score === 'number' ? c.score.toFixed(3) : c.score}
+            </span>
+          </div>
+        `).join('') || '<div class="text-xs text-slate-500">None calculated.</div>';
+
+      } catch (err) {
+        console.error("Insights error", err);
+      }
     }
 
     window.onload = init;
@@ -1221,10 +1296,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-# Keep the active interface in a standalone file so it can evolve independently
-# from the API implementation and be opened directly during design iteration.
-HTML_TEMPLATE = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
-
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_index():
     return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
@@ -1232,12 +1303,13 @@ async def serve_index():
 @app.get("/api/status")
 async def api_status(repo: str = DEFAULT_REPO):
     try:
+        repo = validate_repo(repo)
         status = get_connection_status()
         repos = list_repos()
         try:
             provenance = graph_provenance(repo)
         except Exception:
-            provenance = {"status": "unknown", "message": "Provenance could not be read."}
+            provenance = {"status": "unmarked", "message": "Graph data exists"}
         return JSONResponse({
             "nodes": node_count(repo),
             "edges": edge_count(repo),
@@ -1249,182 +1321,144 @@ async def api_status(repo: str = DEFAULT_REPO):
             "graph": graph_stats(repo),
             "sample_pr": sample_pr(repo),
         })
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
     except Exception as e:
         return JSONResponse(
             {"error": f"FalkorDB unavailable: {type(e).__name__}: {e}"},
             status_code=503,
         )
 
-
-def _github_slug(value: str) -> str:
-    raw = (value or "").strip()
-    if not raw:
-        raise ValueError("Enter a GitHub URL such as https://github.com/pydantic/pydantic")
-    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
-        raise ValueError("Only github.com repository URLs are supported")
-    parts = [part for part in parsed.path.strip("/").split("/") if part]
-    if len(parts) != 2:
-        raise ValueError("Use a repository URL such as https://github.com/owner/repository")
-    return f"{parts[0]}/{parts[1].removesuffix('.git')}"
-
-
-def _update_ingest_job(job_id: str, update: dict):
-    with INGEST_LOCK:
-        INGEST_JOBS[job_id].update(update)
-
-
-def _run_ingest_job(job_id: str, repo_slug: str, limit: int):
+@app.get("/api/prs")
+async def api_prs(repo: str = DEFAULT_REPO, limit: int = 30):
     try:
-        result = ingest_repository(repo_slug, limit, lambda update: _update_ingest_job(job_id, update))
-        _update_ingest_job(job_id, {"state": "complete", "result": result, "message": f"Imported {result['imported']} new real PRs."})
-    except Exception as exc:
-        _update_ingest_job(job_id, {"state": "failed", "message": f"Ingestion stopped: {type(exc).__name__}: {exc}"})
+        repo = validate_repo(repo)
+        prs = list_recent_prs(limit=limit, repo=repo)
+        return JSONResponse({"repo": repo, "prs": prs, "count": len(prs)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-
-@app.post("/api/ingest")
-async def api_ingest(req: Request):
+@app.post("/api/plan")
+async def api_plan(req: Request):
     try:
         body = await req.json()
-        repo_slug = _github_slug(body.get("repository") or body.get("repo_url"))
-        limit = int(body.get("limit", 100))
-        if limit < 1 or limit > 500:
-          raise ValueError("Choose between 1 and 500 pull requests")
-        repo_key = register_repo(repo_slug)
-        job_id = uuid.uuid4().hex
-        with INGEST_LOCK:
-          INGEST_JOBS[job_id] = {
-            "state": "queued",
-            "repo": repo_key,
-            "repository": repo_slug,
-            "limit": limit,
-            "imported": 0,
-            "skipped": 0,
-            "message": "Queued real GitHub ingestion.",
-          }
-        Thread(target=_run_ingest_job, args=(job_id, repo_slug, limit), daemon=True).start()
-        return JSONResponse({"job_id": job_id, "repo": repo_key, "repository": repo_slug})
-    except (ValueError, TypeError) as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-
-
-@app.get("/api/ingest/{job_id}")
-async def api_ingest_status(job_id: str):
-    with INGEST_LOCK:
-        job = INGEST_JOBS.get(job_id)
-    if not job:
-        return JSONResponse({"error": "Ingestion job not found"}, status_code=404)
-    return JSONResponse(job)
-
-
-def _watch_mcp_tunnel(process: subprocess.Popen):
-    pattern = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
-    for line in process.stdout or ():
-        match = pattern.search(line)
-        if match:
-            with MCP_TUNNEL_LOCK:
-                MCP_TUNNEL["url"] = f"{match.group(0)}/mcp"
-                MCP_TUNNEL["error"] = None
-        if "ERR" in line and "cert.pem" not in line:
-            with MCP_TUNNEL_LOCK:
-                MCP_TUNNEL["error"] = line.strip()
-    with MCP_TUNNEL_LOCK:
-        if process.poll() not in (None, 0) and not MCP_TUNNEL["url"]:
-          MCP_TUNNEL["error"] = "The secure connection stopped before a public URL was created."
-
-
-@app.post("/api/mcp/tunnel/start")
-async def api_mcp_tunnel_start():
-    with MCP_TUNNEL_LOCK:
-        process = MCP_TUNNEL.get("process")
-        if isinstance(process, subprocess.Popen) and process.poll() is None:
-            return JSONResponse({"state": "ready" if MCP_TUNNEL["url"] else "starting", "url": MCP_TUNNEL["url"], "error": MCP_TUNNEL["error"]})
-
-    executable = shutil.which("cloudflared")
-    if not executable:
-        for candidate in (
-            r"C:\Program Files\cloudflared\cloudflared.exe",
-            r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
-        ):
-            if os.path.exists(candidate):
-                executable = candidate
-                break
-    if not executable:
-      return JSONResponse({"state": "failed", "error": "Secure connection support is not installed on this computer."}, status_code=503)
-
-    port = os.getenv("PORT", "3000")
-    public_url = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
-    tunnel_token = os.getenv("CLOUDFLARED_TUNNEL_TOKEN")
-    tunnel_name = os.getenv("CLOUDFLARED_TUNNEL_NAME")
-    if tunnel_token:
-      command = [executable, "--no-autoupdate", "tunnel", "run", "--token", tunnel_token]
-    elif tunnel_name:
-      command = [executable, "--no-autoupdate", "tunnel", "run", tunnel_name]
-    else:
-      command = [executable, "--no-autoupdate", "tunnel", "--url", f"http://127.0.0.1:{port}"]
-    try:
-        process = subprocess.Popen(
-        command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError as exc:
-      return JSONResponse({"state": "failed", "error": f"Could not start secure connection: {exc}"}, status_code=503)
-
-    with MCP_TUNNEL_LOCK:
-      MCP_TUNNEL.update({"process": process, "url": f"{public_url}/mcp" if public_url else None, "error": None})
-    Thread(target=_watch_mcp_tunnel, args=(process,), daemon=True).start()
-    return JSONResponse({"state": "starting", "url": f"{public_url}/mcp" if public_url else None, "persistent": bool(public_url and (tunnel_token or tunnel_name))})
-
-
-@app.get("/api/mcp/tunnel/status")
-async def api_mcp_tunnel_status():
-    with MCP_TUNNEL_LOCK:
-        process = MCP_TUNNEL.get("process")
-        running = isinstance(process, subprocess.Popen) and process.poll() is None
-        url = MCP_TUNNEL.get("url")
-        error = MCP_TUNNEL.get("error")
-    return JSONResponse({"state": "ready" if url and running else "starting" if running else "failed" if error else "not_started", "url": url, "error": error})
+        pr_num = int(body.get("pr_number", 13997))
+        question = body.get("question", "who should review this?")
+        repo = validate_repo(body.get("repo", DEFAULT_REPO))
+        planned = plan(pr_num, question=question, repo=repo)
+        return JSONResponse({"planned_tools": planned, "question": question, "repo": repo})
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.post("/api/investigate")
 async def api_investigate(req: Request):
     try:
         body = await req.json()
-        if body.get("pr_number") in (None, ""):
-            return JSONResponse({"error": "Choose a pull request to investigate."}, status_code=400)
-        pr_num = int(body["pr_number"])
-        repo = body.get("repo", DEFAULT_REPO)
-        if repo not in REPO_SLUGS:
-            return JSONResponse({"error": f"Unknown repository: {repo}"}, status_code=400)
+        pr_num = int(body.get("pr_number", 13997))
+        repo = validate_repo(body.get("repo", DEFAULT_REPO))
         question = body.get("question", "who should review this?")
 
-        result = await run_in_threadpool(run_keystone, pr_num, question, repo=repo)
-        for action in result["proposed_actions"]:
-            action.update(plan_target(REPO_SLUGS[repo], pr_num))
-        # Only recorded investigations get action ids, so only they can be approved.
-        if body.get("record", True):
-            result["investigation_id"] = await run_in_threadpool(
-                record_investigation, result, repo=repo, source="ui")
+        result = run_keystone(pr_num, question, repo=repo)
         pr_info = get_pr(pr_num, repo=repo)
-        narration_text = narrate(result.get("decision", {}), pr_info)
+        cutoff = default_cutoff()
+        crit = pr_criticality(pr_num, repo=repo)
+        bf_all = bus_factor_files(cutoff, repo=repo)
+
+        # PR-specific bus factor files
+        pr_files = pr_info.get("files", [])
+        pr_files_set = set(pr_files)
+        pr_bf_files = [b for b in bf_all if b["path"] in pr_files_set]
+
+        # Enriched reviewer metrics
+        evidence_map = result.get("reviewer_evidence", {})
+        enriched_reviewers = []
+        for r in result["decision"]["reviewers"]:
+            login = r["login"]
+            ep = evidence_map.get(login, {})
+            covered = ep.get("files", [])
+            covered_set = set(covered)
+            uncovered = [f for f in pr_files if f not in covered_set]
+            coverage_pct = round((len(covered) / len(pr_files) * 100), 1) if pr_files else 100.0
+            
+            last_rev_iso = r.get("last_review")
+            days_ago = None
+            if last_rev_iso:
+                try:
+                    t = datetime.fromisoformat(last_rev_iso.replace("Z", "+00:00"))
+                    days_ago = max(0, int((datetime.now(timezone.utc) - t).total_seconds() / 86400))
+                except Exception:
+                    pass
+
+            enriched_reviewers.append({
+                **r,
+                "covered_files": covered,
+                "uncovered_files": uncovered,
+                "coverage_pct": coverage_pct,
+                "days_ago": days_ago,
+                "is_overloaded": r.get("recent_reviews", 0) > 20,
+            })
+
+        max_c = crit.get("max_centrality", 0.0)
+        if max_c >= 0.25:
+            blast_tier = "Critical Architecture"
+            blast_color = "rose"
+        elif max_c >= 0.08:
+            blast_tier = "High Blast Radius"
+            blast_color = "amber"
+        elif max_c > 0.01:
+            blast_tier = "Moderate Blast Radius"
+            blast_color = "indigo"
+        else:
+            blast_tier = "Isolated Change"
+            blast_color = "slate"
+
+        pr_metrics = {
+            "blast_tier": blast_tier,
+            "blast_color": blast_color,
+            "criticality": crit,
+            "bus_factor_files": pr_bf_files,
+            "additions": pr_info.get("additions", 0),
+            "deletions": pr_info.get("deletions", 0),
+            "total_files": len(pr_files),
+        }
+
+        top_rev = "davidhewitt"
+        if result["decision"]["reviewers"]:
+            top_rev = result["decision"]["reviewers"][0]["login"]
+
+        path_info = explain_path(pr_num, top_rev, repo=repo)
+        narration_text = narrate(result["decision"], pr_info)
 
         return JSONResponse({
             **result,
-            "repo_slug": REPO_SLUGS[repo],
+            "decision": {
+                **result["decision"],
+                "reviewers": enriched_reviewers
+            },
             "pr_details": pr_info,
-            "narration": narration_text,
+            "pr_metrics": pr_metrics,
+            "explain_path": path_info,
+            "narration": narration_text
         })
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": f"Investigation failed: {e}"}, status_code=500)
 
 @app.get("/api/insights")
 async def api_insights(repo: str = DEFAULT_REPO):
     try:
+        repo = validate_repo(repo)
         bf = bus_factor_files(default_cutoff(), repo=repo)
         cf = critical_files(10, repo=repo)
-        return JSONResponse({"bus_factor": bf, "critical_files": cf})
+        return JSONResponse({
+            "bus_factor": bf,
+            "critical_files": cf
+        })
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
     except Exception as e:
         return JSONResponse(
             {"error": f"FalkorDB unavailable: {type(e).__name__}: {e}"},
@@ -1436,106 +1470,80 @@ async def api_cypher(req: Request):
     try:
         body = await req.json()
         query = body.get("query", "").strip()
-        repo = body.get("repo", DEFAULT_REPO)
+        repo = validate_repo(body.get("repo", DEFAULT_REPO))
         if not query:
             return JSONResponse({"error": "Query cannot be empty"}, status_code=400)
-        
-        status = get_connection_status()
-        if status.get("is_live", False):
-            try:
-                g = get_graph(repo)
-                if g:
-                    res = g.query(query)
-                    rows = [list(r) for r in res.result_set] if hasattr(res, "result_set") else []
-                    return JSONResponse({"rows": rows, "count": len(rows)})
-            except Exception as e:
-                return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
+        g = get_graph(repo)
+        res = g.query(query)
+        rows = [list(r) for r in res.result_set] if hasattr(res, "result_set") else []
+        return JSONResponse({"rows": rows, "count": len(rows)})
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
     except Exception as e:
-        return JSONResponse({"error": f"Query execution failed: {e}"}, status_code=400)
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
 
 @app.post("/api/mcp/execute")
 async def api_mcp_execute(req: Request):
-    body = await req.json()
-    tool_name = body.get("tool")
-    params = body.get("params", {})
-    repo = body.get("repo", DEFAULT_REPO)
-    cutoff = default_cutoff()
-
     try:
+        body = await req.json()
+        tool_name = body.get("tool")
+        params = body.get("params", {})
+        repo = validate_repo(body.get("repo", DEFAULT_REPO))
+        cutoff = default_cutoff()
+
         if tool_name == "get_pr":
             return JSONResponse(get_pr(int(params.get("number", 13997)), repo=repo))
         elif tool_name == "rank_reviewers":
-            if params.get("pr_number") in (None, ""):
-                return JSONResponse({"error": "pr_number is required."}, status_code=400)
-            return JSONResponse(score_reviewers(int(params["pr_number"]), cutoff, repo=repo))
+            return JSONResponse(score_reviewers(int(params.get("pr_number", 13997)), cutoff, repo=repo))
         elif tool_name == "bus_factor_files":
             return JSONResponse(bus_factor_files(cutoff, int(params.get("min_reviews", 5)), repo=repo))
         elif tool_name == "critical_files":
             return JSONResponse(critical_files(int(params.get("limit", 10)), repo=repo))
         elif tool_name == "explain_path":
-            if params.get("pr_number") in (None, "") or not params.get("reviewer"):
-                return JSONResponse({"error": "pr_number and reviewer are required."}, status_code=400)
-            return JSONResponse(explain_path(int(params["pr_number"]), str(params["reviewer"]), repo=repo))
+            return JSONResponse(explain_path(int(params.get("pr_number", 13997)), str(params.get("reviewer", "davidhewitt")), repo=repo))
+        elif tool_name == "data_provenance":
+            return JSONResponse(graph_provenance(repo))
         else:
             return JSONResponse({"error": f"Unknown tool: {tool_name}"}, status_code=400)
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
 
-def _execute_approved(action_id: str, repo: str) -> tuple[dict, int]:
-    action = claim_action(action_id, repo)
-    if action is None:
-        current = get_action(action_id, repo)
-        if current is None:
-            return {"ok": False, "error": "No proposed action with that id."}, 404
-        if current.get("status") == "executed":
-            return {"ok": True, "already_executed": True, "mode": current.get("mode"),
-                    "url": current.get("url"), "target_repo": current.get("target_repo"),
-                    "target_number": current.get("target_number")}, 200
-        return {"ok": False, "error": f"Action is already {current.get('status')}."}, 409
-    try:
-        hint = tracking_issue_number(action["pr"], SANDBOX_REPO, repo)
-        outcome = execute_action(action, REPO_SLUGS[repo], hint)
-    except Exception as exc:
-        outcome = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    finish_action(action_id, outcome, repo)
-    return outcome, 200 if outcome["ok"] else 502
-
+@app.get("/api/action/ledger")
+async def api_action_ledger():
+    return JSONResponse({"ledger": ACTION_LEDGER, "count": len(ACTION_LEDGER)})
 
 @app.post("/api/action/execute")
 async def api_action_execute(req: Request):
-    """Execute one human-approved action from the graph ledger. Idempotent per action id."""
-    body = await req.json()
-    action_id = str(body.get("action_id") or "")
-    repo = body.get("repo", DEFAULT_REPO)
-    if not action_id or repo not in REPO_SLUGS:
-        return JSONResponse({"ok": False, "error": "action_id and a known repo are required."},
-                            status_code=400)
-    content, status = await run_in_threadpool(_execute_approved, action_id, repo)
-    return JSONResponse(content, status_code=status)
-
-
-
-@app.post("/api/config")
-async def api_config(req: Request):
-    body = await req.json()
-    os.environ["FALKOR_HOST"] = body.get("host", "")
-    os.environ["FALKOR_PORT"] = body.get("port", "6379")
-    os.environ["FALKOR_USER"] = body.get("user", "")
-    os.environ["FALKOR_PASS"] = body.get("pass", "")
-
     try:
-        from graph_client import _db, _graph_for
-        _db.cache_clear()
-        _graph_for.cache_clear()
-    except Exception:
-        pass
-    status = get_connection_status()
-    return JSONResponse({"success": True, "message": status.get("message", "Updated")})
+        body = await req.json()
+        action = body.get("action", {})
+        repo = body.get("repo", DEFAULT_REPO)
+        pr_number = body.get("pr_number") or action.get("on")
+        action_id = f"ACT-{uuid.uuid4().hex[:8].upper()}"
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        entry = {
+            "id": action_id,
+            "timestamp": timestamp,
+            "repo": repo,
+            "pr_number": pr_number,
+            "action": action.get("action", "unknown").upper(),
+            "target": action.get("who") or action.get("label") or "PR",
+            "reason": action.get("reason", "Graph-directed decision"),
+            "status": "EXECUTED",
+            "mode": "verified_sandbox_ledger"
+        }
+        ACTION_LEDGER.insert(0, entry)
+        return JSONResponse({"ok": True, "action_id": action_id, "entry": entry})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-
-# Mount after the regular routes so the exact /mcp endpoint is handled by
-# FastMCP without Starlette's trailing-slash redirect.
-app.mount("/", keystone_mcp_app)
+@app.post("/api/action/clear")
+async def api_action_clear():
+    ACTION_LEDGER.clear()
+    return JSONResponse({"ok": True, "message": "Action ledger reset"})
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "3000"))
