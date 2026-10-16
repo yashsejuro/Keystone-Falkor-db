@@ -53,12 +53,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme: dark; }
-    body { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; background-color: #030712; color: #f3f4f6; }
+    :root {
+      color-scheme: dark;
+      --bg-0: #020617;
+      --bg-1: #0b1220;
+      --bg-2: #0f172a;
+      --line: #1e293b;
+      --line-strong: #334155;
+      --text-main: #e2e8f0;
+      --text-muted: #94a3b8;
+      --brand: #6366f1;
+      --brand-soft: #312e81;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #f43f5e;
+    }
+    body { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; background: radial-gradient(1200px 500px at 10% -10%, #1e1b4b 0%, transparent 55%), var(--bg-0); color: var(--text-main); }
     code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
     #network-canvas { width: 100%; height: 460px; background-color: #030712; border-radius: 0.75rem; }
     details summary { cursor: pointer; list-style: none; }
     details summary::-webkit-details-marker { display: none; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: 2px solid #818cf8;
+      outline-offset: 2px;
+    }
+    .surface { background: linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.95)); border: 1px solid var(--line); border-radius: 0.9rem; }
+    .muted { color: var(--text-muted); }
+    .hidden-visually { position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+    .hidden-visually:focus { left: 1rem; top: 1rem; width: auto; height: auto; z-index: 100; padding: 0.5rem 0.75rem; background: #111827; border-radius: 0.5rem; border: 1px solid #4f46e5; color: #fff; }
+    #toast-region { position: fixed; right: 1rem; bottom: 1rem; z-index: 60; display: flex; flex-direction: column; gap: 0.5rem; max-width: 24rem; }
+    .toast { border-radius: 0.75rem; padding: 0.75rem 0.875rem; border: 1px solid var(--line-strong); background: #111827; color: #e2e8f0; font-size: 0.75rem; box-shadow: 0 10px 20px rgba(2, 6, 23, 0.5); }
+    .toast.error { border-color: #7f1d1d; background: #2b1118; color: #fecdd3; }
+    .toast.success { border-color: #14532d; background: #052e1f; color: #bbf7d0; }
     /* Sleek scrollbar */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #030712; }
@@ -66,29 +92,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     ::-webkit-scrollbar-thumb:hover { background: #334155; }
   </style>
 </head>
-<body class="bg-gray-950 text-slate-100 min-h-screen flex flex-col antialiased">
+<body class="text-slate-100 min-h-screen flex flex-col antialiased">
+  <a class="hidden-visually" href="#main-content">Skip to main content</a>
 
-  <!-- Clean Top Engineering Header -->
-  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-4 sm:px-6 py-3">
+  <header class="border-b border-slate-800/80 bg-slate-950/90 backdrop-blur sticky top-0 z-30 px-4 sm:px-6 py-3">
     <div class="max-w-7xl mx-auto flex items-center justify-between">
       <div class="flex items-center space-x-3">
-        <div class="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-base shadow-sm">
-          🧭
+        <div class="w-9 h-9 rounded-lg bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300 font-bold text-base shadow-sm">
+          K
         </div>
         <div>
           <div class="flex items-center space-x-2">
             <span class="font-bold text-base text-white tracking-tight">Keystone</span>
-            <span class="text-[11px] font-mono text-indigo-400 bg-indigo-950/60 border border-indigo-800/60 px-2 py-0.5 rounded">FalkorDB Track 01</span>
+            <span class="text-[11px] font-mono text-indigo-300 bg-indigo-950/60 border border-indigo-800/60 px-2 py-0.5 rounded">Graph PR copilot</span>
           </div>
-          <p class="text-[11px] text-slate-400">Intelligent PR reviewer routing, knowledge coverage & bus-factor mitigation</p>
+          <p class="text-[11px] text-slate-400">Find the right reviewers, surface risk early, and keep PRs moving.</p>
         </div>
       </div>
 
       <div class="flex items-center space-x-3">
-        <!-- Repository Selector -->
         <div class="flex items-center space-x-2 text-xs bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg shadow-sm">
           <span class="text-slate-400 font-medium">Repository:</span>
-          <select id="repo-select" onchange="onRepoChange(this.value)"
+          <select aria-label="Select repository" id="repo-select" onchange="onRepoChange(this.value)"
                   class="font-mono font-semibold text-indigo-300 bg-transparent focus:outline-none cursor-pointer">
             <option value="pydantic">pydantic (1,309 nodes)</option>
             <option value="fastapi">fastapi (active graph)</option>
@@ -103,25 +128,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
   </header>
 
-  <!-- Main Layout -->
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
+  <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-    <!-- Left Column: Controls & Real PR Stats (4 cols) -->
     <div class="lg:col-span-4 space-y-4">
+      <section class="surface p-5 space-y-3">
+        <p class="text-[10px] uppercase tracking-[0.16em] text-indigo-300 font-semibold">Overview</p>
+        <h1 class="text-lg font-semibold text-white">Production-ready reviewer routing for GitHub pull requests</h1>
+        <p class="text-xs text-slate-400">Use real graph data to pick reviewers, explain the recommendation, and approve actions with a full audit trail.</p>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <button onclick="switchTab('decision')" class="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-left">Start with routing</button>
+          <button onclick="switchTab('health')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-lg text-left">View risk signals</button>
+        </div>
+      </section>
 
-      <!-- Investigation Controls Card -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+      <div class="surface p-5 shadow-sm space-y-4">
         <div class="flex items-center justify-between">
           <h2 class="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-1.5">
-            <span>🎯</span>
             <span>Select Pull Request</span>
           </h2>
           <span class="text-[10px] text-emerald-400 font-mono" id="pr-feed-count">Loading PRs...</span>
         </div>
 
-        <!-- Real PR Dropdown Picker -->
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1">Target Pull Request (Real Data)</label>
+          <label for="pr-select" class="block text-xs font-medium text-slate-400 mb-1">Target pull request</label>
           <select id="pr-select" onchange="onSelectPrFromDropdown(this.value)"
                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-indigo-300 font-mono focus:outline-none focus:border-indigo-500 truncate cursor-pointer">
             <option value="13997">#13997: Support explicit by_alias</option>
@@ -130,7 +159,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- Manual PR Input -->
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1">Or PR Number</label>
+          <label for="pr-input" class="block text-xs font-medium text-slate-400 mb-1">Or enter PR number</label>
           <div class="flex gap-2">
             <input type="number" id="pr-input" value="13997" min="1"
                    class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono font-semibold">
@@ -151,7 +180,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <!-- Benchmark Presets -->
         <div class="pt-3 border-t border-slate-800">
           <div class="flex items-center justify-between mb-2">
-            <label class="text-xs font-medium text-slate-400">Ground-Truth Benchmark PRs:</label>
+            <label class="text-xs font-medium text-slate-400">Quick benchmark PRs:</label>
             <span id="preset-repo-tag" class="text-[10px] font-mono text-indigo-400">pydantic</span>
           </div>
           <div id="benchmark-buttons-container" class="grid grid-cols-2 gap-2 text-xs">
@@ -160,8 +189,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- Actionable PR & Architecture Telemetry Card -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3.5">
+      <div class="surface p-5 shadow-sm space-y-3.5">
         <div class="flex items-center justify-between">
           <h2 class="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-1.5">
             <span>📊</span>
@@ -211,30 +239,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="lg:col-span-8 space-y-4">
 
       <!-- Navigation Tabs -->
-      <div class="flex border-b border-slate-800 space-x-1 overflow-x-auto text-xs sm:text-sm">
-        <button onclick="switchTab('decision')" id="tab-btn-decision" class="px-3.5 py-2.5 font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap cursor-pointer">
+      <div role="tablist" aria-label="Keystone views" class="flex border-b border-slate-800 space-x-1 overflow-x-auto text-xs sm:text-sm">
+        <button role="tab" aria-selected="true" aria-controls="tab-decision" onclick="switchTab('decision')" id="tab-btn-decision" class="px-3.5 py-2.5 font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap cursor-pointer">
           🎯 Review Routing & Actions
         </button>
-        <button onclick="switchTab('explain')" id="tab-btn-explain" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+        <button role="tab" aria-selected="false" aria-controls="tab-explain" onclick="switchTab('explain')" id="tab-btn-explain" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
           🗺️ Multi-Hop Traversal
         </button>
-        <button onclick="switchTab('network')" id="tab-btn-network" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+        <button role="tab" aria-selected="false" aria-controls="tab-network" onclick="switchTab('network')" id="tab-btn-network" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
           🕸️ Graph Subgraph
         </button>
-        <button onclick="switchTab('health')" id="tab-btn-health" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+        <button role="tab" aria-selected="false" aria-controls="tab-health" onclick="switchTab('health')" id="tab-btn-health" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
           📈 Codebase Knowledge Health
         </button>
-        <button onclick="switchTab('ledger')" id="tab-btn-ledger" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer flex items-center space-x-1.5">
+        <button role="tab" aria-selected="false" aria-controls="tab-ledger" onclick="switchTab('ledger')" id="tab-btn-ledger" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer flex items-center space-x-1.5">
           <span>📜 Action Ledger</span>
           <span id="ledger-badge" class="px-1.5 py-0.2 rounded bg-indigo-900/80 text-indigo-300 text-[10px] font-mono">0</span>
         </button>
-        <button onclick="switchTab('diagnostics')" id="tab-btn-diagnostics" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
+        <button role="tab" aria-selected="false" aria-controls="tab-diagnostics" onclick="switchTab('diagnostics')" id="tab-btn-diagnostics" class="px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer">
           🔧 Diagnostic Console
         </button>
       </div>
 
       <!-- Tab 1: Decision & Actions -->
-      <div id="tab-decision" class="space-y-4">
+      <div id="tab-decision" role="tabpanel" class="space-y-4">
 
         <!-- PR Details Header -->
         <div id="pr-card" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
@@ -344,7 +372,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Tab 2: Explainability & Multi-Hop -->
-      <div id="tab-explain" class="hidden space-y-4">
+      <div id="tab-explain" role="tabpanel" class="hidden space-y-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div class="flex items-center justify-between flex-wrap gap-2">
             <div>
@@ -403,7 +431,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Tab 3: Graph Visualizer -->
-      <div id="tab-network" class="hidden space-y-4">
+      <div id="tab-network" role="tabpanel" class="hidden space-y-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
@@ -437,7 +465,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Tab 4: Codebase Knowledge Health -->
-      <div id="tab-health" class="hidden space-y-4">
+      <div id="tab-health" role="tabpanel" class="hidden space-y-4">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
             <div class="flex items-center justify-between">
@@ -466,7 +494,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Tab 5: Action Audit Ledger -->
-      <div id="tab-ledger" class="hidden space-y-4">
+      <div id="tab-ledger" role="tabpanel" class="hidden space-y-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
@@ -504,7 +532,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Tab 6: Diagnostic & Cypher Console -->
-      <div id="tab-diagnostics" class="hidden space-y-4">
+      <div id="tab-diagnostics" role="tabpanel" class="hidden space-y-4">
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
@@ -556,6 +584,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
   </main>
+  <div id="toast-region" aria-live="polite" aria-atomic="false"></div>
 
   <script>
     let currentResult = null;
@@ -563,6 +592,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     let currentRepo = 'pydantic';
     let availablePRs = [];
     let currentSelectedCandidate = null;
+    let runInProgress = false;
 
     const BENCHMARKS = {
       'pydantic': [
@@ -579,6 +609,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       ]
     };
 
+    function notify(message, variant = 'default') {
+      const region = document.getElementById('toast-region');
+      if (!region) return;
+      const el = document.createElement('div');
+      el.className = `toast ${variant}`;
+      el.setAttribute('role', 'status');
+      el.innerText = message;
+      region.appendChild(el);
+      setTimeout(() => {
+        el.remove();
+      }, 4000);
+    }
+
+    function setRunButtonState(isBusy, labelText = "Run Knowledge Analysis", iconText = "🚀") {
+      const btn = document.getElementById('run-btn');
+      const icon = document.getElementById('btn-icon');
+      const label = document.getElementById('btn-label');
+      if (!btn || !icon || !label) return;
+      btn.disabled = isBusy;
+      btn.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+      icon.innerText = iconText;
+      label.innerText = labelText;
+    }
+
     function getActivePrNumber() {
       return parseInt(document.getElementById('pr-input').value) || 13997;
     }
@@ -586,25 +640,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     async function init() {
       const params = new URLSearchParams(window.location.search);
       if (params.get('repo')) currentRepo = params.get('repo');
-      
-      await fetchStatus();
-      await fetchPRs(currentRepo);
-      
-      if (params.get('pr')) {
-        document.getElementById('pr-input').value = params.get('pr');
-      } else if (availablePRs.length > 0) {
-        document.getElementById('pr-input').value = availablePRs[0].number;
+      try {
+        await fetchStatus();
+        await fetchPRs(currentRepo);
+        
+        if (params.get('pr')) {
+          document.getElementById('pr-input').value = params.get('pr');
+        } else if (availablePRs.length > 0) {
+          document.getElementById('pr-input').value = availablePRs[0].number;
+        }
+        
+        await fetchInsights();
+        await fetchLedger();
+        await runInvestigation();
+      } catch (err) {
+        console.error("Initialization failed", err);
+        notify("Keystone couldn't finish loading. Check FalkorDB connection and try again.", "error");
       }
-      
-      await fetchInsights();
-      await fetchLedger();
-      await runInvestigation();
     }
 
     async function fetchStatus() {
       try {
         const res = await fetch(`/api/status?repo=${encodeURIComponent(currentRepo)}`);
         const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || "Status request failed");
+        }
         
         const repos = data.repos || ['pydantic', 'fastapi'];
         const topSelect = document.getElementById('repo-select');
@@ -633,6 +694,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         renderBenchmarkButtons();
       } catch (err) {
         console.error("Status error", err);
+        notify("Unable to load repository status.", "error");
       }
     }
 
@@ -653,6 +715,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         feedLabel.innerText = "Loading PRs...";
         const res = await fetch(`/api/prs?repo=${encodeURIComponent(repo)}&limit=30`);
         const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || "PR feed request failed");
+        }
         availablePRs = data.prs || [];
         feedLabel.innerText = `${availablePRs.length} PRs in graph`;
 
@@ -666,6 +731,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
       } catch (err) {
         console.error("PRs load error", err);
+        const feedLabel = document.getElementById('pr-feed-count');
+        feedLabel.innerText = "PR feed unavailable";
+        notify("Unable to load pull requests for this repository.", "error");
       }
     }
 
@@ -705,15 +773,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
 
     async function runInvestigation() {
+      if (runInProgress) return;
       const pr = getActivePrNumber();
       const question = "who should review this?";
-
-      const btn = document.getElementById('run-btn');
-      const icon = document.getElementById('btn-icon');
-      const label = document.getElementById('btn-label');
-      icon.innerText = "⏳";
-      label.innerText = "Analyzing...";
-      btn.disabled = true;
+      runInProgress = true;
+      setRunButtonState(true, "Analyzing pull request...", "⏳");
 
       try {
         const res = await fetch('/api/investigate', {
@@ -722,13 +786,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           body: JSON.stringify({ pr_number: pr, question: question, repo: currentRepo })
         });
         currentResult = await res.json();
+        if (!res.ok || currentResult.error) {
+          throw new Error(currentResult.error || "Investigation request failed");
+        }
         renderResult(currentResult);
+        notify(`Analysis ready for PR #${pr}.`, "success");
       } catch (err) {
         console.error("Investigation error:", err);
+        notify(`Couldn't analyze PR #${pr}. ${err.message || ''}`.trim(), "error");
       } finally {
-        icon.innerText = "🚀";
-        label.innerText = "Run Knowledge Analysis";
-        btn.disabled = false;
+        runInProgress = false;
+        setRunButtonState(false);
       }
     }
 
@@ -1023,9 +1091,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     async function applyApprovedPlan() {
       const inputs = [...document.querySelectorAll('.plan-action:checked')];
       if (!inputs.length) {
-        alert("Please select at least one action to execute.");
+        notify("Select at least one action before execution.", "error");
         return;
       }
+      const confirmed = window.confirm(`Execute ${inputs.length} approved action${inputs.length === 1 ? '' : 's'} for PR #${currentResult?.pr_number || getActivePrNumber()}?`);
+      if (!confirmed) return;
       const btn = document.getElementById('apply-plan-btn');
       btn.disabled = true;
       btn.innerText = "Executing & Logging Actions...";
@@ -1049,6 +1119,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
           } catch (e) {
             console.error("Action exec error", e);
+            notify(`Failed to execute action ${actionObj.action || ''}.`, "error");
           }
         }
       }
@@ -1057,6 +1128,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       btn.disabled = false;
       btn.innerText = "✓ Actions Executed & Logged in Graph Ledger";
+      notify("Approved actions were recorded in the ledger.", "success");
     }
 
     async function fetchLedger() {
@@ -1087,12 +1159,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         `).join('');
       } catch (err) {
         console.error("Ledger fetch error", err);
+        notify("Unable to load the action ledger.", "error");
       }
     }
 
     async function clearActionLedger() {
+      const confirmed = window.confirm("Clear the action ledger? This removes the in-memory audit history from this session.");
+      if (!confirmed) return;
       await fetch('/api/action/clear', { method: 'POST' });
       await fetchLedger();
+      notify("Action ledger has been reset.", "success");
     }
 
     function renderInteractiveNetwork(data) {
@@ -1199,11 +1275,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const tabs = ['decision', 'explain', 'network', 'health', 'ledger', 'diagnostics'];
       tabs.forEach(t => {
         document.getElementById(`tab-${t}`).classList.add('hidden');
-        document.getElementById(`tab-btn-${t}`).className = "px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer";
+        const tabBtn = document.getElementById(`tab-btn-${t}`);
+        tabBtn.className = `px-3.5 py-2.5 font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer${t === 'ledger' ? ' flex items-center space-x-1.5' : ''}`;
+        tabBtn.setAttribute('aria-selected', 'false');
       });
 
       document.getElementById(`tab-${tab}`).classList.remove('hidden');
-      document.getElementById(`tab-btn-${tab}`).className = "px-3.5 py-2.5 font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap cursor-pointer";
+      const activeBtn = document.getElementById(`tab-btn-${tab}`);
+      activeBtn.className = `px-3.5 py-2.5 font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap cursor-pointer${tab === 'ledger' ? ' flex items-center space-x-1.5' : ''}`;
+      activeBtn.setAttribute('aria-selected', 'true');
 
       if (tab === 'network' && networkInstance) {
         setTimeout(() => { networkInstance.fit(); }, 100);
@@ -1256,6 +1336,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       } catch (err) {
         status.innerText = `Error: ${err}`;
+        notify("Cypher query failed. Check syntax or connection health.", "error");
       }
     }
 
@@ -1287,6 +1368,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       } catch (err) {
         console.error("Insights error", err);
+        notify("Repository insights are unavailable right now.", "error");
       }
     }
 
