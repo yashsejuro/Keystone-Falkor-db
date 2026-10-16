@@ -34,15 +34,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    :root { color-scheme: dark; }
+    body { background: #0a0a0a; color: #fafafa; font: 14px/1.5 'Plus Jakarta Sans', sans-serif; }
     code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
-    #network-canvas { width: 100%; height: 440px; background-color: #030712; border-radius: 0.75rem; }
+    #network-canvas { width: 100%; height: 400px; background: #0a0a0a; border: 1px solid #27272a; border-radius: 4px; }
+    details summary { cursor: pointer; list-style: none; }
+    details summary::-webkit-details-marker { display: none; }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
 
   <!-- Top Hackathon Track Header Banner -->
-  <div class="bg-gradient-to-r from-purple-950/80 via-indigo-950/90 to-slate-900 border-b border-indigo-900/50 px-6 py-2 text-xs">
+  <div class="hidden">
     <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center space-x-2">
         <span class="px-2 py-0.5 rounded font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">TRACK 01</span>
@@ -60,45 +63,49 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
 
   <!-- Main Navigation / Topbar -->
-  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-6 py-3.5">
-    <div class="max-w-7xl mx-auto flex items-center justify-between">
+  <header class="h-14 border-b border-[#27272a] px-6">
+    <div class="max-w-[1100px] h-full mx-auto flex items-center justify-between">
       <div class="flex items-center space-x-3">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-xl shadow-md">
-          🧭
+        <div class="hidden">
         </div>
         <div>
           <div class="flex items-center space-x-2">
             <span class="font-bold text-lg text-white tracking-tight">Keystone</span>
-            <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">FalkorDB Graph Agent</span>
+            <span class="hidden">FalkorDB Graph Agent</span>
           </div>
-          <p class="text-xs text-slate-400">Knowledge-risk analysis, reviewer routing & bus-factor mitigation</p>
+          <p class="hidden">Knowledge-risk analysis, reviewer routing & bus-factor mitigation</p>
         </div>
       </div>
 
-      <div class="flex items-center space-x-4">
-        <div class="flex items-center space-x-2 text-xs bg-slate-800/80 border border-slate-700 px-3 py-1.5 rounded-lg">
-          <span class="text-slate-400">Dataset:</span>
-          <span class="font-mono font-medium text-indigo-300">pydantic/pydantic</span>
+      <div class="flex items-center gap-6">
+        <div class="flex items-center text-xs">
+          <span class="hidden">Dataset:</span>
+          <select id="repo-select" onchange="onRepoChange(this.value)" aria-label="Repository"
+                  class="font-mono text-[13px] text-[#a1a1aa] bg-transparent border border-transparent hover:border-[#27272a] focus:outline-none focus:border-[#6366f1] rounded px-2 py-1 cursor-pointer"></select>
         </div>
-        <div id="conn-pill" class="flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/60 text-emerald-300">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span id="conn-text">Connecting to FalkorDB...</span>
+        <a href="/inbox" class="text-[13px] text-[#a1a1aa] hover:text-[#fafafa] hover:underline">PR Inbox</a>
+        <div id="conn-pill" class="flex items-center gap-2 text-[13px] text-[#a1a1aa]">
+          <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
+          <span id="conn-text">Connected</span>
         </div>
       </div>
     </div>
   </header>
 
+  <section class="px-6 py-[60px] text-center">
+    <p class="max-w-[640px] mx-auto text-xl text-[#a1a1aa]">Pick a PR. See who knows it, who should review it, and what breaks if they leave.</p>
+  </section>
+
   <!-- Main Layout -->
-  <main class="max-w-7xl mx-auto px-6 py-6 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
+  <main class="max-w-[1100px] mx-auto px-6 pb-12 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
 
     <!-- Left Column: Controls & Metrics (4 cols) -->
-    <div class="lg:col-span-4 space-y-6">
+    <div class="lg:col-span-4 space-y-8">
 
       <!-- Investigation Controls Card -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+      <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-5">
         <div class="flex items-center justify-between">
           <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-            <span>🎯</span>
             <span>PR Investigation</span>
           </h2>
           <span class="text-xs text-indigo-400 font-mono">Agent Target</span>
@@ -118,8 +125,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div>
           <button id="run-btn" onclick="runInvestigation()"
-                  class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-medium py-2.5 px-4 rounded-lg text-sm shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
-            <span id="btn-icon">🚀</span>
+                  class="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-medium py-2.5 px-4 rounded text-sm shadow-sm transition cursor-pointer">
+            <span id="btn-icon"></span>
             <span id="btn-label">Execute Keystone Agent</span>
           </button>
         </div>
@@ -149,10 +156,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Graph Metrics Card -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+      <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-5">
         <div class="flex items-center justify-between">
           <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-            <span>📊</span>
             <span>FalkorDB Graph</span>
           </h2>
           <span class="text-[11px] text-emerald-400 font-mono">Live Memory</span>
@@ -202,10 +208,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <!-- Agent Memory Card -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
+      <div class="hidden">
         <div class="flex items-center justify-between">
           <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-            <span>🧠</span>
             <span>Agent Memory & State</span>
           </h2>
           <span class="text-[11px] text-slate-400 font-mono">Session Log</span>
@@ -224,22 +229,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <!-- Navigation Tabs -->
       <div class="flex border-b border-slate-800 space-x-1 overflow-x-auto">
         <button onclick="switchTab('decision')" id="tab-btn-decision" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap">
-          🎯 Decision & Actions
+          Investigation
         </button>
-        <button onclick="switchTab('network')" id="tab-btn-network" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          🕸️ Interactive Graph Visualizer
+        <button onclick="switchTab('network')" id="tab-btn-network" class="hidden">
         </button>
         <button onclick="switchTab('explain')" id="tab-btn-explain" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          🗺️ Multi-Hop Reasoning
+          Why this answer?
         </button>
-        <button onclick="switchTab('mcp')" id="tab-btn-mcp" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          🔌 MCP Protocol (FastMCP)
+        <button onclick="switchTab('mcp')" id="tab-btn-mcp" class="hidden">
         </button>
         <button onclick="switchTab('cypher')" id="tab-btn-cypher" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          🔍 Cypher Console
+          Query the graph
         </button>
         <button onclick="switchTab('health')" id="tab-btn-health" class="px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">
-          📈 Risk & Bus-Factor
+          Repo health
         </button>
       </div>
 
@@ -266,16 +269,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
 
         <!-- Plan Trace -->
-        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-slate-200 flex items-center space-x-2">
-              <span>📋</span>
-              <span>Agent Execution Plan Trace</span>
-            </h3>
-            <span class="text-xs text-slate-500 font-mono">Deterministic Graph Decision</span>
-          </div>
-          <div id="plan-trace" class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 space-y-1.5 text-xs font-mono text-slate-300 overflow-x-auto"></div>
-        </div>
+        <details class="border-b border-[#27272a] pb-4">
+          <summary class="text-[14px] text-[#a1a1aa]">Agent trace (5 steps)</summary>
+          <div id="plan-trace" class="mt-3 space-y-1 text-[13px] font-mono text-[#a1a1aa] overflow-x-auto"></div>
+        </details>
 
         <!-- Risk Flags -->
         <div id="risk-container" class="space-y-2"></div>
@@ -285,7 +282,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>👥</span>
                 <span>Graph-Ranked Reviewers</span>
               </h3>
               <p id="rationale-text" class="text-xs text-indigo-300 mt-0.5 italic"></p>
@@ -326,6 +322,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div id="actions-container" class="space-y-3"></div>
         </div>
 
+        <section class="space-y-2 pt-2">
+          <h3 class="text-base font-medium text-[#fafafa]">Graph neighborhood</h3>
+          <p class="text-[13px] text-[#a1a1aa]">Nodes this decision touched. Drag to explore.</p>
+          <div id="network-canvas-target"></div>
+        </section>
+
       </div>
 
       <!-- Tab 2: Interactive 2D Graph Visualizer -->
@@ -334,7 +336,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>🕸️</span>
                 <span>Interactive Multi-Hop Subgraph Neighborhood</span>
               </h3>
               <p class="text-xs text-slate-400 mt-0.5">Physics-based force network rendering connections in real-time. Drag nodes or scroll to zoom.</p>
@@ -363,7 +364,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div>
             <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-              <span>🗺️</span>
               <span>Multi-Hop Traversal Path Explainability</span>
             </h3>
             <p id="explain-header" class="text-xs text-slate-400 mt-1">Tracing how the candidate connects to touched files via graph traversals</p>
@@ -384,7 +384,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>🔌</span>
                 <span>FastMCP Agent Tools Interface (`mcp_server.py`)</span>
               </h3>
               <p class="text-xs text-slate-400 mt-0.5">Keystone tools exposed over standard Model Context Protocol for Claude Desktop, Cursor, and LLM Agents</p>
@@ -464,7 +463,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>🔍</span>
                 <span>FalkorDB Cypher Query Console</span>
               </h3>
               <p class="text-xs text-slate-400 mt-0.5">Explore the graph data model and execute Cypher queries directly on FalkorDB</p>
@@ -505,6 +503,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
               </table>
             </div>
           </div>
+          <details class="pt-4 border-t border-[#27272a]">
+            <summary class="text-[13px] text-[#a1a1aa]">MCP tools (for Claude Desktop / Cursor)</summary>
+            <div id="mcp-tools-target"></div>
+          </details>
         </div>
       </div>
 
@@ -529,7 +531,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-semibold text-indigo-300 flex items-center space-x-2">
-                <span>🌐</span>
                 <span>Critical Files (Centrality)</span>
               </h3>
               <span class="text-[11px] text-slate-500">Betweenness Centrality</span>
@@ -548,6 +549,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <script>
     let currentResult = null;
     let networkInstance = null;
+    let currentRepo = null;
 
     function showToast(msg, isError = false) {
       let toast = document.getElementById('toast-notification');
@@ -575,15 +577,31 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const data = await res.json();
         document.getElementById('stat-nodes').innerText = (data.nodes || 1305).toLocaleString();
         document.getElementById('stat-edges').innerText = (data.edges || 3330).toLocaleString();
+        const repoSelect = document.getElementById('repo-select');
+        const repos = data.repos || [];
+        repoSelect.innerHTML = '';
+        repos.forEach(repo => {
+          const option = document.createElement('option');
+          option.value = repo;
+          option.textContent = repo;
+          repoSelect.appendChild(option);
+        });
+        if (repos.includes(currentRepo)) {
+          repoSelect.value = currentRepo;
+        } else {
+          currentRepo = repos.includes(data.current_repo) ? data.current_repo : (repos[0] || null);
+          repoSelect.value = currentRepo || '';
+        }
         
         const pill = document.getElementById('conn-pill');
         const txt = document.getElementById('conn-text');
         if (data.is_live) {
-          pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/60 text-emerald-300";
-          txt.innerText = "FalkorDB Connected (" + (data.message.split('(')[1]?.replace(')', '') || 'Live') + ")";
+          pill.className = "flex items-center gap-2 text-[13px] text-[#a1a1aa]";
+          txt.innerText = "Connected";
                 } else {
-          pill.className = "flex items-center space-x-2 text-xs px-3 py-1.5 rounded-lg bg-rose-950/60 border border-rose-700/60 text-rose-300";
-          txt.innerText = "FalkorDB unreachable";
+          pill.className = "flex items-center gap-2 text-[13px] text-[#a1a1aa]";
+          pill.firstElementChild.className = "w-2 h-2 rounded-full bg-red-500";
+          txt.innerText = "Disconnected";
         }
       } catch (err) {
         console.error("Status error", err);
@@ -602,23 +620,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         // Render Bus Factor
         const bfList = document.getElementById('bus-factor-list');
         bfList.innerHTML = (data.bus_factor || []).map(b => `
-          <div class="bg-slate-950 border border-rose-900/40 rounded-lg p-3 text-xs">
-            <div class="font-mono text-slate-200 font-medium truncate">${b.path}</div>
-            <div class="flex items-center justify-between mt-1 text-slate-400">
-              <span>Sole Reviewer: <strong class="text-rose-400 font-mono">@${b.sole_reviewer}</strong></span>
-              <span>${b.sole_count} / ${b.total} reviews (${Math.round(b.sole_count / b.total * 100)}%)</span>
-            </div>
+          <div class="border-b border-[#27272a] pb-3 text-xs">
+            <div class="font-mono text-[#fafafa] truncate">${b.path}</div>
+            <div class="mt-1 text-[#a1a1aa]">${b.sole_reviewer} reviewer · ${b.sole_count}/${b.total} reviews</div>
           </div>
         `).join('') || '<div class="text-xs text-slate-500">No coverage gaps detected.</div>';
 
         // Render Critical Files
         const cfList = document.getElementById('critical-files-list');
         cfList.innerHTML = (data.critical_files || []).map(c => `
-          <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs flex items-center justify-between">
-            <span class="font-mono text-slate-200 truncate pr-2">${c.path}</span>
-            <span class="font-mono px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800 text-indigo-300 font-medium">
-              ${c.score.toFixed(3)}
-            </span>
+          <div class="border-b border-[#27272a] pb-3 text-xs">
+            <div class="font-mono text-[#fafafa] truncate">${c.path}</div>
+            <div class="mt-1 text-[#a1a1aa]">betweenness score ${c.score.toFixed(3)}</div>
           </div>
         `).join('') || '<div class="text-xs text-slate-500">None calculated.</div>';
 
@@ -629,6 +642,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     function selectPr(num) {
       document.getElementById('pr-input').value = num;
+      runInvestigation();
+    }
+
+    function onRepoChange(value) {
+      currentRepo = value;
       runInvestigation();
     }
 
@@ -647,7 +665,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const res = await fetch('/api/investigate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pr_number: pr, question: question })
+          body: JSON.stringify({ pr_number: pr, question: question, repo: currentRepo })
         });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -660,7 +678,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       } catch (err) {
         showToast("Failed to run Keystone: " + err, true);
       } finally {
-        icon.innerText = "🚀";
+        icon.innerText = "";
         label.innerText = "Execute Keystone Agent";
         btn.disabled = false;
       }
@@ -686,7 +704,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const filesList = document.getElementById('pr-files-list');
       filesList.innerHTML = (pr.files || []).map(f => `
         <span class="font-mono text-[11px] px-2 py-1 rounded bg-slate-950 border border-slate-800 text-slate-300">
-          📄 ${f}
+          ${f}
         </span>
       `).join('');
 
@@ -715,7 +733,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       } else {
         riskContainer.innerHTML = flags.map(flag => `
           <div class="bg-rose-950/40 border border-rose-800/60 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-rose-300">
-            <span class="text-base">🚩</span>
             <div>
               <div class="font-semibold uppercase tracking-wider text-[11px]">Graph Risk Detected (Coverage Gap)</div>
               <div class="font-mono mt-0.5">${flag}</div>
@@ -851,7 +868,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       filesBox.innerHTML = files.map(f => `
         <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 text-xs font-mono flex items-center justify-between">
           <div class="flex items-center space-x-2 truncate">
-            <span class="text-cyan-400">📄</span>
             <span class="text-slate-200">${f}</span>
           </div>
           <span class="text-slate-500 text-[11px]">Multi-Hop Review Evidence in Graph</span>
@@ -946,7 +962,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
 
     function switchTab(tab) {
-      const tabs = ['decision', 'network', 'explain', 'mcp', 'cypher', 'health'];
+      const tabs = ['decision', 'explain', 'cypher', 'health'];
       tabs.forEach(t => {
         document.getElementById(`tab-${t}`).classList.add('hidden');
         document.getElementById(`tab-btn-${t}`).className = "px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap";
@@ -955,9 +971,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById(`tab-${tab}`).classList.remove('hidden');
       document.getElementById(`tab-btn-${tab}`).className = "px-3.5 py-2.5 text-xs sm:text-sm font-medium border-b-2 border-indigo-500 text-indigo-400 whitespace-nowrap";
 
-      if (tab === 'network' && networkInstance) {
-        setTimeout(() => { networkInstance.fit(); }, 100);
-      }
     }
 
     function toggleConfig() {
@@ -1049,6 +1062,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       } catch (err) {
         status.innerText = `Error: ${err}`;
       }
+    }
+
+    const networkCanvas = document.getElementById('network-canvas');
+    const networkTarget = document.getElementById('network-canvas-target');
+    if (networkCanvas && networkTarget) networkTarget.appendChild(networkCanvas);
+
+    const mcpPanel = document.getElementById('tab-mcp');
+    const mcpTarget = document.getElementById('mcp-tools-target');
+    if (mcpPanel && mcpTarget) {
+      mcpPanel.className = 'space-y-4 mt-4';
+      mcpTarget.appendChild(mcpPanel);
     }
 
     window.onload = init;
