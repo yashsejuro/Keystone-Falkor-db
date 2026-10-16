@@ -3,14 +3,24 @@ Built for the Wemakedev x FalkorDB Hackathon (Track 01: Agents That Act on Conne
 """
 import os
 import json
+import uuid
+import re
+import shutil
+import subprocess
+from pathlib import Path
+from threading import Lock, Thread
+from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastmcp.utilities.lifespan import combine_lifespans
 import uvicorn
 
-from graph_client import node_count, edge_count, get_connection_status, get_graph, list_repos, DEFAULT_REPO
+from graph_client import node_count, edge_count, get_connection_status, get_graph, list_repos, DEFAULT_REPO, register_repo, REPO_SLUGS
 from agent import run_keystone
 from tools import get_pr, explain_path, bus_factor_files, critical_files, default_cutoff, reviewer_candidates
 from scoring import score_reviewers
+from ingest_service import ingest_repository
+from mcp_server import mcp as keystone_mcp
 
 try:
     from narration import narrate
@@ -18,9 +28,24 @@ except Exception:
     def narrate(decision, pr):
         return decision.get("rationale", "")
 
-app = FastAPI(title="Keystone", description="Graph-based PR Reviewer Routing & Knowledge Risk Agent")
+keystone_mcp_app = keystone_mcp.http_app(
+  path="/mcp",
+  transport="streamable-http",
+  stateless_http=True,
+  host_origin_protection=False,
+)
+app = FastAPI(
+  title="Keystone",
+  description="Graph-based PR Reviewer Routing & Knowledge Risk Agent",
+  lifespan=combine_lifespans(keystone_mcp_app.lifespan),
+)
 from inbox import router as inbox_router
 app.include_router(inbox_router)
+
+INGEST_JOBS: dict[str, dict] = {}
+INGEST_LOCK = Lock()
+MCP_TUNNEL: dict[str, object] = {"process": None, "url": None, "error": None}
+MCP_TUNNEL_LOCK = Lock()
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -83,7 +108,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <select id="repo-select" onchange="onRepoChange(this.value)" aria-label="Repository"
                   class="font-mono text-[13px] text-[#a1a1aa] bg-transparent border border-transparent hover:border-[#27272a] focus:outline-none focus:border-[#6366f1] rounded px-2 py-1 cursor-pointer"></select>
         </div>
-        <a href="/inbox" class="text-[13px] text-[#a1a1aa] hover:text-[#fafafa] hover:underline">PR Inbox</a>
+        <a href="/inbox" class="text-[13px] text-[#a1a1aa] hover:text-[#fafafa] hover:underline">Risk queue</a>
         <div id="conn-pill" class="flex items-center gap-2 text-[13px] text-[#a1a1aa]">
           <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
           <span id="conn-text">Connected</span>
@@ -92,8 +117,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
   </header>
 
-  <section class="px-6 py-[60px] text-center">
-    <p class="max-w-[640px] mx-auto text-xl text-[#a1a1aa]">Pick a PR. See who knows it, who should review it, and what breaks if they leave.</p>
+  <section class="px-6 pt-10 pb-8">
+    <div class="max-w-[1100px] mx-auto">
+      <p class="text-xs uppercase tracking-[0.18em] text-indigo-400 font-semibold">Review intelligence</p>
+      <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight text-white mt-2">Make every pull request reviewable.</h1>
+      <p class="max-w-[680px] text-sm sm:text-base text-[#a1a1aa] mt-3">Keystone finds the people who understand a change, surfaces knowledge risk, and prepares a safe review plan.</p>
+    </div>
   </section>
 
   <!-- Main Layout -->
@@ -105,10 +134,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <!-- Investigation Controls Card -->
       <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-5">
         <div class="flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-            <span>PR Investigation</span>
+          <h2 class="text-sm font-semibold text-slate-200 flex items-center space-x-2">
+            <span>Analyze a pull request</span>
           </h2>
-          <span class="text-xs text-indigo-400 font-mono">Agent Target</span>
+          <span class="text-xs text-slate-500">Start here</span>
         </div>
 
         <div>
@@ -127,13 +156,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <button id="run-btn" onclick="runInvestigation()"
                   class="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-medium py-2.5 px-4 rounded text-sm shadow-sm transition cursor-pointer">
             <span id="btn-icon"></span>
-            <span id="btn-label">Execute Keystone Agent</span>
+            <span id="btn-label">Analyze PR</span>
           </button>
+          <button onclick="runShowcase()" class="w-full mt-2 border border-slate-700 hover:border-indigo-500 text-slate-300 hover:text-white font-medium py-2 px-4 rounded text-xs transition cursor-pointer">Run 60-second showcase</button>
         </div>
 
         <!-- Benchmark PR Chips -->
         <div class="pt-2 border-t border-slate-800/80">
-          <label class="block text-xs font-medium text-slate-400 mb-2">Ground-Truth Benchmark PRs:</label>
+          <label class="block text-xs font-medium text-slate-400 mb-2">Try a known example</label>
           <div class="grid grid-cols-2 gap-2 text-xs">
             <button onclick="selectPr(13997)" class="text-left bg-slate-950 hover:bg-slate-800 border border-slate-800 p-2 rounded-lg transition">
               <span class="font-mono text-indigo-400 font-semibold block">#13997</span>
@@ -158,10 +188,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <!-- Graph Metrics Card -->
       <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-5">
         <div class="flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
+          <h2 class="text-sm font-semibold text-slate-200 flex items-center space-x-2">
             <span>FalkorDB Graph</span>
           </h2>
-          <span class="text-[11px] text-emerald-400 font-mono">Live Memory</span>
+          <span class="text-[11px] text-emerald-400 font-mono">Live graph</span>
         </div>
         
         <div class="grid grid-cols-2 gap-3">
@@ -204,6 +234,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
               Apply & Reconnect
             </button>
           </div>
+        </div>
+      </div>
+
+      <div class="bg-[#141414] border border-[#27272a] rounded-md p-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-200">Why graph reasoning?</h2>
+          <span class="text-[11px] text-emerald-400 font-mono">Backtest</span>
+        </div>
+        <p class="text-xs text-slate-400">On 60 held-out PRs, Keystone found the actual top reviewer more often than a frequent-reviewer baseline.</p>
+        <div class="flex items-end gap-5">
+          <div><div class="text-2xl font-bold font-mono text-indigo-300">51.7%</div><div class="text-[11px] text-slate-500">Keystone top-1</div></div>
+          <div><div class="text-lg font-bold font-mono text-slate-300">40.0%</div><div class="text-[11px] text-slate-500">Baseline top-1</div></div>
+          <div class="text-xs text-emerald-400 font-semibold pb-1">+12 pts</div>
         </div>
       </div>
 
@@ -268,6 +311,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div id="pr-files-list" class="mt-3 flex flex-wrap gap-1.5 pt-3 border-t border-slate-800/80"></div>
         </div>
 
+        <div class="bg-gradient-to-br from-indigo-950/70 to-slate-900 border border-indigo-800/60 rounded-xl p-5">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Review readiness</p>
+              <h3 id="readiness-title" class="text-xl font-semibold text-white mt-1">Analyzing change coverage...</h3>
+            </div>
+            <span id="readiness-badge" class="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-300">Waiting</span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+            <div><div class="text-xs text-slate-400">Reviewer coverage</div><div id="readiness-coverage" class="text-lg font-semibold text-white mt-1">—</div></div>
+            <div><div class="text-xs text-slate-400">Knowledge risk</div><div id="readiness-risk" class="text-lg font-semibold text-white mt-1">—</div></div>
+            <div><div class="text-xs text-slate-400">Candidates</div><div id="readiness-candidates" class="text-lg font-semibold text-white mt-1">—</div></div>
+            <div><div class="text-xs text-slate-400">Change shape</div><div id="readiness-shape" class="text-lg font-semibold text-white mt-1">—</div></div>
+          </div>
+        </div>
+
         <!-- Plan Trace -->
         <details class="border-b border-[#27272a] pb-4">
           <summary class="text-[14px] text-[#a1a1aa]">Agent trace (5 steps)</summary>
@@ -282,12 +341,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
-                <span>Graph-Ranked Reviewers</span>
+                <span>Recommended reviewers</span>
               </h3>
               <p id="rationale-text" class="text-xs text-indigo-300 mt-0.5 italic"></p>
             </div>
-            <span class="text-xs text-slate-400 font-mono">Scoring: Overlap &times; Recency</span>
+            <span class="text-xs text-slate-400">Graph evidence</span>
           </div>
+
+          <div id="top-reviewer-card" class="mb-4"></div>
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs">
@@ -312,14 +373,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div>
               <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
                 <span>⚡</span>
-                <span>Proposed Graph Actions (Human-in-the-Loop)</span>
+                <span>Proposed review plan</span>
               </h3>
-              <p class="text-xs text-slate-400 mt-0.5">Actions based on what the graph revealed, requiring approval before execution</p>
+              <p class="text-xs text-slate-400 mt-0.5">Review the plan before anything is sent to the Keystone sandbox.</p>
             </div>
-            <span class="text-xs px-2.5 py-1 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300 font-medium">Approval Gate</span>
+            <span class="text-xs px-2.5 py-1 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300 font-medium">Sandbox only</span>
           </div>
 
           <div id="actions-container" class="space-y-3"></div>
+          <button id="apply-plan-btn" onclick="applyApprovedPlan()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium py-2.5 rounded transition cursor-pointer">Apply selected plan</button>
+          <p class="text-[11px] text-slate-500">Keystone never changes the analyzed source repository during this demo.</p>
         </div>
 
         <section class="space-y-2 pt-2">
@@ -565,6 +628,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
 
     async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('pr')) document.getElementById('pr-input').value = params.get('pr');
+      if (params.get('repo')) currentRepo = params.get('repo');
       await fetchStatus();
       await fetchInsights();
       await runInvestigation();
@@ -645,6 +711,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       runInvestigation();
     }
 
+    function runShowcase() {
+      document.getElementById('pr-input').value = 13997;
+      document.getElementById('question-input').value = 'who should review this and what knowledge risk should I know about?';
+      runInvestigation();
+    }
+
+    function scrollToPlan() {
+      document.getElementById('actions-container').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
     function onRepoChange(value) {
       currentRepo = value;
       runInvestigation();
@@ -679,9 +755,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         showToast("Failed to run Keystone: " + err, true);
       } finally {
         icon.innerText = "";
-        label.innerText = "Execute Keystone Agent";
+        label.innerText = "Analyze PR";
         btn.disabled = false;
       }
+    }
+
+    async function applyApprovedPlan() {
+      if (!currentResult?.proposed_actions?.length) {
+        showToast('There are no actions to apply.');
+        return;
+      }
+      const selected = [...document.querySelectorAll('.plan-action:checked')]
+        .map(input => currentResult.proposed_actions[Number(input.dataset.actionIndex)])
+        .filter(Boolean);
+      if (!selected.length) {
+        showToast('Select at least one action first.', true);
+        return;
+      }
+
+      const button = document.getElementById('apply-plan-btn');
+      button.disabled = true;
+      button.innerText = 'Applying approved plan...';
+      let completed = 0;
+      for (const action of selected) {
+        const payload = { action: { ...action, on: currentResult.pr_number } };
+        const response = await fetch('/api/action/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: payload.action })
+        });
+        const result = await response.json();
+        if (!result.ok) {
+          showToast(`Plan stopped: ${result.error || 'action failed'}`, true);
+          break;
+        }
+        completed += 1;
+        logMemory(`SANDBOX action completed: ${action.action}`);
+      }
+      button.innerText = completed ? `${completed} sandbox action${completed === 1 ? '' : 's'} applied` : 'Apply selected plan';
+      button.disabled = false;
+      if (completed === selected.length) showToast('Approved plan applied to the Keystone sandbox.');
     }
 
     function logMemory(msg) {
@@ -720,6 +833,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const summaryText = data.narration || data.decision?.rationale || "";
       document.getElementById('rationale-text').innerText = summaryText ? `"${summaryText}"` : "";
 
+      const reviewers = data.decision?.reviewers || [];
+      const riskFlags = data.decision?.risk_flags || [];
+      const changedFiles = pr.files || [];
+      const coverage = reviewers.length ? `${Math.min(reviewers[0].shared_files || 0, changedFiles.length)} / ${changedFiles.length || 0}` : `0 / ${changedFiles.length || 0}`;
+      const isCrossModule = new Set(changedFiles.map(file => file.split('/').slice(0, 2).join('/'))).size > 1;
+      document.getElementById('readiness-title').innerText = riskFlags.length ? 'Needs attention before review' : 'Ready for human review';
+      document.getElementById('readiness-badge').innerText = riskFlags.length ? 'Risk detected' : 'Good coverage';
+      document.getElementById('readiness-badge').className = `text-xs px-2.5 py-1 rounded-full ${riskFlags.length ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'}`;
+      document.getElementById('readiness-coverage').innerText = coverage;
+      document.getElementById('readiness-risk').innerText = riskFlags.length ? `${riskFlags.length} flagged` : 'Low';
+      document.getElementById('readiness-candidates').innerText = reviewers.length;
+      document.getElementById('readiness-shape').innerText = isCrossModule ? 'Cross-module' : 'Focused change';
+
+      const topCard = document.getElementById('top-reviewer-card');
+      if (reviewers.length) {
+        const top = reviewers[0];
+        topCard.innerHTML = `
+          <div class="border border-indigo-700/60 bg-indigo-950/30 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <div class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Best match</div>
+              <div class="text-xl font-semibold text-white mt-1">@${top.login}</div>
+              <p class="text-xs text-slate-300 mt-1">Knows ${top.shared_files} file${top.shared_files === 1 ? '' : 's'} in this change and reviewed ${top.recent_reviews} recent PR${top.recent_reviews === 1 ? '' : 's'}.</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="text-right"><div class="text-[11px] text-slate-400">Graph score</div><div class="text-lg font-mono font-semibold text-indigo-300">${top.score.toFixed(2)}</div></div>
+              <button onclick="scrollToPlan()" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-2 rounded transition">Add to plan</button>
+            </div>
+          </div>`;
+      } else {
+        topCard.innerHTML = '<div class="border border-amber-800/60 bg-amber-950/20 rounded-lg p-4 text-sm text-amber-300">No reviewer has enough connected evidence yet. Use the risk details below to guide a human assignment.</div>';
+      }
+
       // Risk Flags
       const riskContainer = document.getElementById('risk-container');
       const flags = data.decision?.risk_flags || [];
@@ -743,7 +888,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       // Reviewers Table
       const revBody = document.getElementById('reviewers-body');
-      const reviewers = data.decision?.reviewers || [];
       if (reviewers.length === 0) {
         revBody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500">No candidate reviewer above threshold.</td></tr>`;
       } else {
@@ -775,25 +919,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       if (actions.length === 0) {
         actContainer.innerHTML = `<div class="text-xs text-slate-500">No actions required.</div>`;
       } else {
-        actContainer.innerHTML = actions.map((act, i) => {
+          actContainer.innerHTML = actions.map((act, i) => {
           const target = act.who || act.label;
           const actName = act.action.replace('_', ' ').toUpperCase();
           return `
-            <div id="act-card-${i}" class="bg-slate-950 border border-slate-800 rounded-lg p-3.5 flex items-center justify-between">
+            <label id="act-card-${i}" class="bg-slate-950 border border-slate-800 rounded-lg p-3.5 flex items-center justify-between cursor-pointer hover:border-slate-600">
               <div>
+                <input type="checkbox" class="plan-action mr-2 accent-indigo-500" data-action-index="${i}" checked>
                 <span class="text-xs font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-300 mr-2">${actName}</span>
                 <span class="font-mono text-sm text-indigo-300 font-medium">${target}</span>
                 <span class="text-xs text-slate-500 ml-2">on PR #${act.on}</span>
               </div>
-              <div id="act-actions-${i}" class="flex items-center space-x-2">
-                <button onclick="approveAction(${i}, '${act.action}', '${target}')" class="bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded transition cursor-pointer">
-                  ✓ Approve
-                </button>
-                <button onclick="rejectAction(${i}, '${act.action}', '${target}')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded transition cursor-pointer">
-                  ✕ Reject
-                </button>
-              </div>
-            </div>
+            </label>
           `;
         }).join('');
       }
@@ -1081,6 +1218,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+# Keep the active interface in a standalone file so it can evolve independently
+# from the API implementation and be opened directly during design iteration.
+HTML_TEMPLATE = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
+
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_index():
     return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
@@ -1090,6 +1231,30 @@ async def api_status(repo: str = DEFAULT_REPO):
     try:
         status = get_connection_status()
         repos = list_repos()
+        provenance = {"status": "unknown", "message": "No ingestion provenance marker exists for this graph."}
+        try:
+            rows = get_graph(repo).query(
+                "MATCH (m:KeystoneMetadata {key: 'provenance'}) "
+                "RETURN m.source, m.repository, m.last_ingested_at, m.last_import_count "
+                "ORDER BY m.last_ingested_at DESC LIMIT 1",
+                {},
+            ).result_set
+            if rows:
+                source, repository, ingested_at, imported = rows[0]
+                provenance = {
+                    "status": "real",
+                    "source": source,
+                    "repository": repository,
+                    "last_ingested_at": ingested_at,
+                    "last_import_count": imported,
+                    "message": "This graph contains data imported from the GitHub API.",
+                }
+            elif node_count(repo) > 0:
+                provenance = {"status": "unmarked", "message": "This graph already has data, but its original source was not recorded."}
+            else:
+                provenance = {"status": "empty", "message": "No pull request data has been ingested yet."}
+        except Exception:
+            pass
         return JSONResponse({
             "nodes": node_count(repo),
             "edges": edge_count(repo),
@@ -1097,12 +1262,146 @@ async def api_status(repo: str = DEFAULT_REPO):
             "current_repo": repo,
             "is_live": status.get("is_live", False),
             "message": status.get("message", "FalkorDB"),
+            "provenance": provenance,
         })
     except Exception as e:
         return JSONResponse(
             {"error": f"FalkorDB unavailable: {type(e).__name__}: {e}"},
             status_code=503,
         )
+
+
+def _github_slug(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("Enter a GitHub URL such as https://github.com/pydantic/pydantic")
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
+        raise ValueError("Only github.com repository URLs are supported")
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) != 2:
+        raise ValueError("Use a repository URL such as https://github.com/owner/repository")
+    return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+
+
+def _update_ingest_job(job_id: str, update: dict):
+    with INGEST_LOCK:
+        INGEST_JOBS[job_id].update(update)
+
+
+def _run_ingest_job(job_id: str, repo_slug: str, limit: int):
+    try:
+        result = ingest_repository(repo_slug, limit, lambda update: _update_ingest_job(job_id, update))
+        _update_ingest_job(job_id, {"state": "complete", "result": result, "message": f"Imported {result['imported']} new real PRs."})
+    except Exception as exc:
+        _update_ingest_job(job_id, {"state": "failed", "message": f"Ingestion stopped: {type(exc).__name__}: {exc}"})
+
+
+@app.post("/api/ingest")
+async def api_ingest(req: Request):
+    try:
+        body = await req.json()
+        repo_slug = _github_slug(body.get("repository") or body.get("repo_url"))
+        limit = int(body.get("limit", 100))
+        if limit < 1 or limit > 500:
+          raise ValueError("Choose between 1 and 500 pull requests")
+        repo_key = register_repo(repo_slug)
+        job_id = uuid.uuid4().hex
+        with INGEST_LOCK:
+          INGEST_JOBS[job_id] = {
+            "state": "queued",
+            "repo": repo_key,
+            "repository": repo_slug,
+            "limit": limit,
+            "imported": 0,
+            "skipped": 0,
+            "message": "Queued real GitHub ingestion.",
+          }
+        Thread(target=_run_ingest_job, args=(job_id, repo_slug, limit), daemon=True).start()
+        return JSONResponse({"job_id": job_id, "repo": repo_key, "repository": repo_slug})
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get("/api/ingest/{job_id}")
+async def api_ingest_status(job_id: str):
+    with INGEST_LOCK:
+        job = INGEST_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Ingestion job not found"}, status_code=404)
+    return JSONResponse(job)
+
+
+def _watch_mcp_tunnel(process: subprocess.Popen):
+    pattern = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+    for line in process.stdout or ():
+        match = pattern.search(line)
+        if match:
+            with MCP_TUNNEL_LOCK:
+                MCP_TUNNEL["url"] = f"{match.group(0)}/mcp"
+                MCP_TUNNEL["error"] = None
+        if "ERR" in line and "cert.pem" not in line:
+            with MCP_TUNNEL_LOCK:
+                MCP_TUNNEL["error"] = line.strip()
+    with MCP_TUNNEL_LOCK:
+        if process.poll() not in (None, 0) and not MCP_TUNNEL["url"]:
+          MCP_TUNNEL["error"] = "The secure connection stopped before a public URL was created."
+
+
+@app.post("/api/mcp/tunnel/start")
+async def api_mcp_tunnel_start():
+    with MCP_TUNNEL_LOCK:
+        process = MCP_TUNNEL.get("process")
+        if isinstance(process, subprocess.Popen) and process.poll() is None:
+            return JSONResponse({"state": "ready" if MCP_TUNNEL["url"] else "starting", "url": MCP_TUNNEL["url"], "error": MCP_TUNNEL["error"]})
+
+    executable = shutil.which("cloudflared")
+    if not executable:
+        for candidate in (
+            r"C:\Program Files\cloudflared\cloudflared.exe",
+            r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
+        ):
+            if os.path.exists(candidate):
+                executable = candidate
+                break
+    if not executable:
+      return JSONResponse({"state": "failed", "error": "Secure connection support is not installed on this computer."}, status_code=503)
+
+    port = os.getenv("PORT", "3000")
+    public_url = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
+    tunnel_token = os.getenv("CLOUDFLARED_TUNNEL_TOKEN")
+    tunnel_name = os.getenv("CLOUDFLARED_TUNNEL_NAME")
+    if tunnel_token:
+      command = [executable, "--no-autoupdate", "tunnel", "run", "--token", tunnel_token]
+    elif tunnel_name:
+      command = [executable, "--no-autoupdate", "tunnel", "run", tunnel_name]
+    else:
+      command = [executable, "--no-autoupdate", "tunnel", "--url", f"http://127.0.0.1:{port}"]
+    try:
+        process = subprocess.Popen(
+        command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+      return JSONResponse({"state": "failed", "error": f"Could not start secure connection: {exc}"}, status_code=503)
+
+    with MCP_TUNNEL_LOCK:
+      MCP_TUNNEL.update({"process": process, "url": f"{public_url}/mcp" if public_url else None, "error": None})
+    Thread(target=_watch_mcp_tunnel, args=(process,), daemon=True).start()
+    return JSONResponse({"state": "starting", "url": f"{public_url}/mcp" if public_url else None, "persistent": bool(public_url and (tunnel_token or tunnel_name))})
+
+
+@app.get("/api/mcp/tunnel/status")
+async def api_mcp_tunnel_status():
+    with MCP_TUNNEL_LOCK:
+        process = MCP_TUNNEL.get("process")
+        running = isinstance(process, subprocess.Popen) and process.poll() is None
+        url = MCP_TUNNEL.get("url")
+        error = MCP_TUNNEL.get("error")
+    return JSONResponse({"state": "ready" if url and running else "starting" if running else "failed" if error else "not_started", "url": url, "error": error})
 
 @app.post("/api/investigate")
 async def api_investigate(req: Request):
@@ -1219,6 +1518,11 @@ async def api_config(req: Request):
         pass
     status = get_connection_status()
     return JSONResponse({"success": True, "message": status.get("message", "Updated")})
+
+
+# Mount after the regular routes so the exact /mcp endpoint is handled by
+# FastMCP without Starlette's trailing-slash redirect.
+app.mount("/", keystone_mcp_app)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "3000"))

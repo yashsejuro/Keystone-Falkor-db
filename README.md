@@ -64,14 +64,64 @@ Edges:
 
 ## Local setup
 
+### Windows: one-click launch
+
+1. Install stable Python 3.11, 3.12, or 3.13 once from https://www.python.org/downloads/.
+2. Double-click `run_keystone.bat`.
+
+The launcher creates a local virtual environment, installs dependencies, creates
+`.env` from `.env.example` when needed, opens the browser, and starts Keystone.
+On the first run, add `FALKOR_HOST`, `FALKOR_PORT`, `FALKOR_USER`,
+`FALKOR_PASS`, and optionally `GITHUB_TOKEN` to `.env`, then double-click the
+launcher again. Later runs reuse the existing environment.
+
+### Ingest a repository from the UI
+
+On the welcome screen, use **Connect real repository data**:
+
+1. Paste a GitHub repository URL, for example `https://github.com/pydantic/pydantic`.
+2. Choose how many merged PRs to import.
+3. Click **Connect and ingest real PRs**.
+
+Keystone fetches merged pull requests, changed files, authors, and submitted
+reviews from the GitHub API. Ingestion runs in the background, skips PRs already
+in the graph, and records a provenance marker containing the source repository
+and import time. No synthetic PRs or reviewer records are created.
+
+The current pre-existing graphs contain real connected FalkorDB data, but their
+original ingestion source was not recorded. The UI labels them **Existing data,
+source unmarked** rather than claiming they are newly imported or demo data.
+
+### Terminal launch
+
     pip install -r requirements.txt
     # set FALKOR_HOST, FALKOR_PORT, FALKOR_USER, FALKOR_PASS, GITHUB_TOKEN in .env
-    python ingest.py       # one-time: ingest ~500 merged PRs from pydantic/pydantic
-    streamlit run app.py
+    python app.py
+
+### Connect MCP without editing JSON
+
+When Keystone is running, its MCP tools are available over Streamable HTTP at:
+
+    http://localhost:3000/mcp
+
+Use the **Connect MCP** link in the navbar, then click **Connect to Claude**.
+Keystone starts a temporary Cloudflare HTTPS tunnel and displays the complete
+public URL, including `/mcp`, for copying into Claude's custom connector.
+Users do not need to find or run a batch file.
+
+The automatic tunnel is for demos and is not a 10-day service. For a stable
+connection, create a Cloudflare named tunnel once, point it at Keystone, and set
+`CLOUDFLARED_TUNNEL_TOKEN` plus `MCP_PUBLIC_URL` in `.env`. The same **Connect
+to Claude** button will then start the named tunnel and return the stable URL.
+For a real team deployment, run Keystone on a hosted machine with HTTPS and
+authentication rather than exposing a personal laptop.
+
+The existing `mcp_server.py` stdio entrypoint remains available for clients that
+require local process configuration.
 
 ## Deployment
 
-Streamlit app connects to FalkorDB Cloud.
+The FastAPI app connects to FalkorDB Cloud.
 
 ## AI usage disclosure
 

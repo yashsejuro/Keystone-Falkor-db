@@ -1,6 +1,7 @@
 """Keystone MCP server. Exposes graph tools over stdio for Claude Desktop,
 Cursor, or any MCP client."""
 from fastmcp import FastMCP
+from graph_client import graph_provenance
 from tools import (
     get_pr as _get_pr,
     reviewer_candidates as _candidates,
@@ -49,6 +50,12 @@ def critical_files(limit: int = 20) -> list[dict]:
 def explain_path(pr_number: int, reviewer: str) -> dict:
     """Shortest graph path from a PR's files to a candidate reviewer."""
     return _safe(_explain, pr_number, reviewer)
+
+
+@mcp.tool()
+def data_provenance() -> dict:
+    """Report whether the connected graph has recorded GitHub provenance."""
+    return _safe(graph_provenance)
 
 
 if __name__ == "__main__":

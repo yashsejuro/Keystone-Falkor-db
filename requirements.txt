@@ -2,10 +2,6 @@ falkordb
 python-dotenv
 requests
 fastmcp
-streamlit
-pyvis
-numpy
-pandas
 fastapi
 uvicorn
 groq

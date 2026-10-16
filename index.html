@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Keystone | Review intelligence</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b0d12; color: #f6f7f9; font-family: 'DM Sans', sans-serif; }
+    h1, h2, h3, .display { font-family: 'Space Grotesk', sans-serif; }
+    .shell { max-width: 1180px; margin: 0 auto; }
+    .hairline { border-color: #252a35; }
+    .muted { color: #9ba3b2; }
+    .panel { background: #11151d; border: 1px solid #252a35; }
+    .panel-soft { background: #0f131a; border: 1px solid #202632; }
+    .accent { color: #8ea7ff; }
+    .accent-bg { background: #657ff5; }
+    .accent-bg:hover { background: #7690ff; }
+    .step-number { background: #1a2449; color: #9bb0ff; border: 1px solid #35488e; }
+    .hidden-view { display: none !important; }
+    .fade-in { animation: fade-in .35s ease-out both; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .status-dot { width: 8px; height: 8px; border-radius: 999px; background: #eabf63; display: inline-block; }
+    .status-dot.live { background: #65d6a0; }
+    button, a, select, input { font: inherit; }
+    button:disabled { opacity: .6; cursor: wait; }
+  </style>
+</head>
+<body>
+  <header class="border-b hairline">
+    <div class="shell px-5 sm:px-8 h-16 flex items-center justify-between">
+      <button onclick="showView('home')" class="flex items-center gap-3 text-left">
+        <span class="w-9 h-9 rounded-lg bg-indigo-500/15 border border-indigo-400/30 flex items-center justify-center text-indigo-200 font-bold">K</span>
+        <span><span class="display text-lg font-bold block leading-none">Keystone</span><span class="text-[11px] muted">Review intelligence for connected code</span></span>
+      </button>
+      <nav class="flex items-center gap-4 sm:gap-7 text-sm">
+        <span class="hidden sm:inline text-[10px] uppercase tracking-[.16em] text-indigo-300">Track 01</span>
+        <button onclick="showView('home')" class="muted hover:text-white">How it works</button>
+        <button onclick="showView('home'); setTimeout(() => scrollToSection('ingest-section'), 50)" class="accent hover:text-white font-medium">Connect repository</button>
+        <button onclick="showView('home'); setTimeout(() => scrollToSection('mcp-section'), 50)" class="muted hover:text-white">Connect MCP</button>
+        <a href="/inbox" class="muted hover:text-white">Risk queue</a>
+        <span class="flex items-center gap-2 text-xs muted"><span id="status-dot" class="status-dot"></span><span id="status-text">Checking graph</span></span>
+      </nav>
+    </div>
+  </header>
+
+  <main class="shell px-5 sm:px-8 pb-20">
+    <section id="home-view" class="fade-in">
+      <div class="grid lg:grid-cols-[1.1fr_.9fr] gap-12 lg:gap-20 pt-16 sm:pt-24 pb-16 items-center">
+        <div>
+          <div class="inline-flex items-center gap-2 rounded-full border border-indigo-400/30 bg-indigo-400/10 px-3 py-1.5 text-xs accent font-medium">For teams reviewing unfamiliar code</div>
+          <h1 class="display text-4xl sm:text-6xl leading-[1.04] font-bold mt-6 max-w-3xl">Find the right reviewer before the review gets stuck.</h1>
+          <p class="text-lg sm:text-xl muted leading-relaxed mt-6 max-w-2xl">Keystone connects pull requests to the people, files, and review history behind your repository. It turns scattered code knowledge into an explainable review plan.</p>
+          <div class="flex flex-wrap gap-3 mt-8">
+            <button onclick="showView('analyze')" class="accent-bg text-white px-5 py-3 rounded-lg font-semibold text-sm shadow-lg shadow-indigo-950/40">Analyze a PR <span class="ml-2">&#8594;</span></button>
+            <button onclick="scrollToSection('workflow')" class="panel hover:border-slate-500 px-5 py-3 rounded-lg text-sm font-medium">See how it works</button>
+          </div>
+          <p class="text-xs muted mt-5">No black-box reviewer assignment. Every recommendation includes the graph evidence behind it.</p>
+        </div>
+
+        <div class="panel rounded-2xl p-5 sm:p-7 shadow-2xl shadow-black/20">
+          <div class="flex items-center justify-between border-b hairline pb-4">
+            <div><div class="text-xs uppercase tracking-[.16em] muted">A typical Keystone answer</div><div class="display text-lg font-semibold mt-1">PR #13997 needs context</div></div>
+            <span class="text-xs rounded-full px-2.5 py-1 bg-amber-400/10 border border-amber-300/20 text-amber-200">Needs attention</span>
+          </div>
+          <div class="py-6">
+            <div class="text-xs muted">Recommended reviewer</div>
+            <div class="display text-3xl font-bold mt-1">@davidhewitt</div>
+            <p class="text-sm muted mt-2">Strongest connected knowledge for this change.</p>
+          </div>
+          <div class="grid grid-cols-3 gap-3 border-y hairline py-4">
+            <div><div class="text-xl font-semibold accent">3</div><div class="text-[11px] muted mt-1">shared files</div></div>
+            <div><div class="text-xl font-semibold accent">6</div><div class="text-[11px] muted mt-1">recent reviews</div></div>
+            <div><div class="text-xl font-semibold text-amber-200">2</div><div class="text-[11px] muted mt-1">risk flags</div></div>
+          </div>
+          <div class="flex items-center gap-3 mt-5 text-xs muted"><span class="w-2 h-2 rounded-full bg-indigo-400"></span>PR <span>&#8594;</span><span class="w-2 h-2 rounded-full bg-cyan-400"></span>files <span>&#8594;</span><span class="w-2 h-2 rounded-full bg-emerald-400"></span>reviewer</div>
+        </div>
+      </div>
+
+      <section class="border-y hairline py-8 mb-2">
+        <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
+          <div class="max-w-xl"><div class="text-xs uppercase tracking-[.16em] accent font-semibold">Agents that act on connected data</div><h2 class="display text-2xl sm:text-3xl font-bold mt-3">One question. Five connected capabilities.</h2><p class="text-sm muted leading-relaxed mt-3">Keystone chooses graph tools, follows multi-hop evidence, explains the result, and prepares an action you can approve.</p></div>
+          <div class="text-xs muted">Powered by real repository review history</div>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mt-7">
+          <div class="panel-soft rounded-lg p-3"><div class="text-indigo-200 text-lg">&#8594;</div><div class="text-sm font-medium mt-2">Multi-hop reasoning</div><div class="text-[11px] muted mt-1">PR &rarr; files &rarr; history &rarr; people</div></div>
+          <div class="panel-soft rounded-lg p-3"><div class="text-cyan-200 text-lg">&#9678;</div><div class="text-sm font-medium mt-2">Graph tools</div><div class="text-[11px] muted mt-1">Scoring and centrality on demand</div></div>
+          <div class="panel-soft rounded-lg p-3"><div class="text-amber-200 text-lg">&#9881;</div><div class="text-sm font-medium mt-2">MCP tool selection</div><div class="text-[11px] muted mt-1">Use Keystone from an MCP client</div></div>
+          <div class="panel-soft rounded-lg p-3"><div class="text-emerald-200 text-lg">&#10003;</div><div class="text-sm font-medium mt-2">Graph-based action</div><div class="text-[11px] muted mt-1">Prepare a safe review plan</div></div>
+          <div class="panel-soft rounded-lg p-3"><div class="text-rose-200 text-lg">&#10551;</div><div class="text-sm font-medium mt-2">Explainable result</div><div class="text-[11px] muted mt-1">See the evidence behind the answer</div></div>
+        </div>
+      </section>
+
+      <section id="mcp-section" class="grid lg:grid-cols-[1fr_.8fr] gap-5 py-12">
+        <div class="panel rounded-xl p-6 sm:p-7">
+          <div class="text-xs uppercase tracking-[.16em] text-amber-200 font-semibold">One-click connection</div>
+          <h2 class="display text-2xl sm:text-3xl font-bold mt-3">Connect Claude without touching a config file.</h2>
+          <p class="text-sm muted leading-relaxed mt-3">Keystone will create an HTTPS connection for you. Demo mode creates a temporary URL; a configured team tunnel can keep the same URL for days.</p>
+          <button id="mcp-connect-btn" onclick="startMcpTunnel()" class="accent-bg text-white rounded-lg px-4 py-3 mt-6 text-sm font-semibold">Connect to Claude <span class="ml-2">&#8594;</span></button>
+          <div id="mcp-status" class="hidden-view rounded-lg border border-indigo-400/20 bg-indigo-400/5 p-4 mt-4 text-sm"><div id="mcp-status-message" class="text-slate-200">Creating secure connection...</div><div id="mcp-url-row" class="hidden-view flex items-center gap-2 mt-3"><code id="mcp-url" class="flex-1 min-w-0 truncate rounded-lg bg-[#0b0d12] border hairline px-3 py-3 text-sm text-indigo-200"></code><button onclick="copyMcpUrl()" class="accent-bg text-white rounded-lg px-4 py-3 text-sm font-semibold whitespace-nowrap">Copy URL</button></div></div>
+          <div class="flex flex-wrap gap-2 mt-4 text-xs muted"><span class="panel-soft rounded px-2 py-1">rank reviewers</span><span class="panel-soft rounded px-2 py-1">critical files</span><span class="panel-soft rounded px-2 py-1">bus-factor risk</span><span class="panel-soft rounded px-2 py-1">explain path</span></div>
+        </div>
+        <div class="panel-soft rounded-xl p-6 sm:p-7"><div class="text-xs uppercase tracking-[.16em] accent font-semibold">How to use it</div><ol class="text-sm space-y-4 mt-5"><li class="flex gap-3"><span class="font-mono accent">01</span><span>Click <strong class="text-slate-200">Connect to Claude</strong> here.</span></li><li class="flex gap-3"><span class="font-mono accent">02</span><span>Copy the generated HTTPS URL with <code class="text-slate-200">/mcp</code> already included.</span></li><li class="flex gap-3"><span class="font-mono accent">03</span><span>Paste it into Claude's <strong class="text-slate-200">Add custom connector</strong> screen and ask: “Who should review PR 13997?”</span></li></ol><p class="text-xs muted leading-relaxed mt-6">Demo URLs are temporary. For multi-day use, configure a persistent team tunnel or host Keystone on a server.</p></div>
+      </section>
+
+      <section id="workflow" class="border-t hairline py-16">
+        <div class="max-w-2xl"><div class="text-xs uppercase tracking-[.16em] accent font-semibold">The workflow</div><h2 class="display text-3xl sm:text-4xl font-bold mt-3">Three steps from unfamiliar change to confident review.</h2><p class="muted mt-4 leading-relaxed">Keystone is designed for the moment when a pull request touches an area nobody wants to claim they understand.</p></div>
+        <div class="grid md:grid-cols-3 gap-4 mt-9">
+          <article class="panel rounded-xl p-5"><div class="step-number w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold">1</div><h3 class="display text-lg font-semibold mt-5">Connect knowledge</h3><p class="text-sm muted leading-relaxed mt-2">Ingest merged pull requests, reviewers, authors, and touched files into FalkorDB. Keystone learns from the repository's actual review history.</p></article>
+          <article class="panel rounded-xl p-5"><div class="step-number w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold">2</div><h3 class="display text-lg font-semibold mt-5">Ask about a PR</h3><p class="text-sm muted leading-relaxed mt-2">Choose a repository and enter a pull request number. The graph traces file overlap, recent context, and knowledge concentration.</p></article>
+          <article class="panel rounded-xl p-5"><div class="step-number w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold">3</div><h3 class="display text-lg font-semibold mt-5">Act with evidence</h3><p class="text-sm muted leading-relaxed mt-2">Get a ranked reviewer, clear risk flags, and a safe sandbox plan. You stay in control of every action.</p></article>
+        </div>
+      </section>
+
+      <section id="ingest-section" class="grid lg:grid-cols-[1fr_.85fr] gap-5 pb-16">
+        <div class="panel rounded-xl p-6 sm:p-7">
+          <div class="text-xs uppercase tracking-[.16em] accent font-semibold">Connect real repository data</div>
+          <h2 class="display text-2xl sm:text-3xl font-bold mt-3">Bring a GitHub repository into Keystone.</h2>
+          <p class="text-sm muted leading-relaxed mt-3">Paste a public GitHub repository URL. Keystone will fetch its real merged PRs, changed files, authors, and submitted reviews into FalkorDB. Existing PRs are skipped, so you can safely resume.</p>
+          <div class="grid sm:grid-cols-[1fr_150px] gap-3 mt-6">
+            <label class="text-sm font-medium">Repository URL<input id="ingest-repo" type="url" placeholder="https://github.com/owner/repository" class="block w-full bg-[#0b0d12] border hairline rounded-lg px-3 py-2.5 mt-2 text-sm text-white"></label>
+            <label class="text-sm font-medium">Merged PRs<input id="ingest-limit" type="number" min="1" max="500" value="100" class="block w-full bg-[#0b0d12] border hairline rounded-lg px-3 py-2.5 mt-2 text-sm text-white"></label>
+          </div>
+          <button id="ingest-btn" onclick="startIngest()" class="accent-bg text-white rounded-lg px-4 py-3 mt-5 text-sm font-semibold">Connect and ingest real PRs <span class="ml-2">&#8594;</span></button>
+          <div id="ingest-status" class="hidden-view mt-4 rounded-lg border border-indigo-400/20 bg-indigo-400/5 p-4 text-sm"><div class="flex items-center justify-between gap-3"><span id="ingest-message" class="text-slate-200">Preparing ingestion...</span><span id="ingest-count" class="text-xs accent"></span></div><div class="h-1.5 bg-slate-800 rounded-full mt-3 overflow-hidden"><div id="ingest-progress" class="h-full bg-indigo-400 rounded-full" style="width: 4%"></div></div><div class="text-[11px] muted mt-2">Live GitHub API data only. This can take a few minutes depending on repository size.</div></div>
+        </div>
+        <div class="panel-soft rounded-xl p-6 sm:p-7">
+          <div class="text-xs uppercase tracking-[.16em] text-emerald-300 font-semibold">Data provenance</div>
+          <h2 class="display text-2xl font-bold mt-3">Know what you are analyzing.</h2>
+          <p class="text-sm muted leading-relaxed mt-3">Keystone does not invent PRs or reviewer history. Every new ingestion is marked with its GitHub source and import time.</p>
+          <div id="provenance-card" class="rounded-lg border border-slate-700 bg-[#0b0d12] p-4 mt-6 text-sm"><div class="flex items-center gap-2"><span class="status-dot"></span><span>Checking connected graph...</span></div></div>
+          <div class="text-xs muted leading-relaxed mt-5">A pre-existing graph without a provenance marker is labeled honestly as “unmarked.” It is not presented as newly imported demo data.</div>
+        </div>
+      </section>
+
+      <section class="grid lg:grid-cols-2 gap-5 pb-8">
+        <div class="panel rounded-xl p-6"><div class="text-xs uppercase tracking-[.16em] text-emerald-300 font-semibold">What you get</div><h2 class="display text-2xl font-bold mt-3">Less guessing. More useful reviews.</h2><div class="space-y-4 mt-6"><div class="flex gap-3"><span class="text-emerald-300">&#10003;</span><div><div class="font-medium">A person, not a popularity contest</div><div class="text-sm muted mt-1">Recommendations combine shared files, review recency, and availability signals.</div></div></div><div class="flex gap-3"><span class="text-emerald-300">&#10003;</span><div><div class="font-medium">Risks you can explain</div><div class="text-sm muted mt-1">See when a change depends on one person's knowledge or crosses module boundaries.</div></div></div><div class="flex gap-3"><span class="text-emerald-300">&#10003;</span><div><div class="font-medium">Actions with a safety boundary</div><div class="text-sm muted mt-1">The demo writes only to the Keystone sandbox, never to the analyzed source repository.</div></div></div></div></div>
+        <div class="panel rounded-xl p-6"><div class="text-xs uppercase tracking-[.16em] text-amber-200 font-semibold">Before you start</div><h2 class="display text-2xl font-bold mt-3">How repository data gets here</h2><p class="text-sm muted leading-relaxed mt-3">Keystone does not guess from a code snippet. An operator first ingests a repository's merged PR history into FalkorDB.</p><ol class="text-sm space-y-3 mt-5"><li class="flex gap-3"><span class="font-mono accent">01</span><span>Set FalkorDB and GitHub credentials in <code class="text-slate-200">.env</code>.</span></li><li class="flex gap-3"><span class="font-mono accent">02</span><span>Run <code class="text-slate-200">python ingest.py</code> once for the repository.</span></li><li class="flex gap-3"><span class="font-mono accent">03</span><span>Return here, choose the repository, and analyze a PR.</span></li></ol><p class="text-xs muted mt-5">For the ready-to-judge demo, sample repositories are already available in the connected graph.</p></div>
+      </section>
+    </section>
+
+    <section id="analyze-view" class="hidden-view fade-in pt-12">
+      <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b hairline pb-7">
+        <div><button onclick="showView('home')" class="text-xs accent hover:text-white mb-4">&#8592; Back to overview</button><div class="text-xs uppercase tracking-[.16em] accent font-semibold">Investigation workspace</div><h1 class="display text-3xl sm:text-4xl font-bold mt-2">Understand a PR before assigning it.</h1><p class="muted mt-3 max-w-2xl">Keystone will compare this change with the repository's review memory and explain the recommendation.</p></div>
+        <button onclick="runShowcase()" class="panel hover:border-indigo-400/50 px-4 py-2.5 rounded-lg text-sm">Load showcase PR</button>
+      </div>
+
+      <div class="grid lg:grid-cols-[320px_1fr] gap-6 mt-8">
+        <aside class="space-y-4">
+          <div class="panel rounded-xl p-5"><div class="text-xs uppercase tracking-[.16em] muted font-semibold">Start analysis</div><label class="block text-sm font-medium mt-5 mb-2">Repository</label><select id="repo-select" class="w-full bg-[#0b0d12] border hairline rounded-lg px-3 py-2.5 text-sm text-white"></select><label class="block text-sm font-medium mt-4 mb-2">Pull request number</label><input id="pr-input" type="number" min="1" value="13997" class="w-full bg-[#0b0d12] border hairline rounded-lg px-3 py-2.5 text-sm text-white"><label class="block text-sm font-medium mt-4 mb-2">Ask Keystone</label><input id="question-input" value="Who should review this?" class="w-full bg-[#0b0d12] border hairline rounded-lg px-3 py-2.5 text-sm text-white"><div class="flex flex-wrap gap-2 mt-3"><button onclick="setQuestion('Who should review this?')" class="text-[11px] panel-soft rounded px-2 py-1 muted hover:text-white">Best reviewer</button><button onclick="setQuestion('What knowledge risk should I know about?')" class="text-[11px] panel-soft rounded px-2 py-1 muted hover:text-white">Find risk</button><button onclick="setQuestion('Which files are critical?')" class="text-[11px] panel-soft rounded px-2 py-1 muted hover:text-white">Critical files</button></div><button id="run-btn" onclick="runInvestigation()" class="accent-bg w-full text-white rounded-lg px-4 py-3 mt-5 text-sm font-semibold">Ask Keystone <span id="btn-icon"></span></button><p class="text-[11px] muted mt-3">One question triggers tool selection, graph reasoning, evidence, and an approval-ready plan.</p></div>
+          <div class="panel-soft rounded-xl p-5"><div class="flex items-center justify-between"><div class="text-sm font-semibold">Graph connection</div><span id="side-status" class="text-xs muted">Checking</span></div><div class="grid grid-cols-2 gap-3 mt-4"><div><div id="stat-nodes" class="text-lg font-semibold">-</div><div class="text-[11px] muted">connected nodes</div></div><div><div id="stat-edges" class="text-lg font-semibold">-</div><div class="text-[11px] muted">relationships</div></div></div><details class="mt-5 border-t hairline pt-4"><summary class="text-xs muted cursor-pointer">Connection settings</summary><p class="text-xs muted leading-relaxed mt-3">Set FalkorDB credentials in <code>.env</code> and restart the one-click launcher.</p></details></div>
+        </aside>
+
+        <div id="results" class="space-y-5">
+          <div id="empty-state" class="panel rounded-xl p-8 sm:p-12 text-center"><div class="mx-auto w-12 h-12 rounded-xl bg-indigo-400/10 border border-indigo-400/20 flex items-center justify-center text-indigo-200 text-xl">&#8594;</div><h2 class="display text-2xl font-semibold mt-5">Your answer will appear here</h2><p class="muted max-w-md mx-auto mt-3">Choose a repository and PR, then Keystone will show the best reviewer, the evidence, and any knowledge risk.</p></div>
+          <div id="result-content" class="hidden-view">
+            <div id="pr-card" class="panel rounded-xl p-5"><div class="flex flex-wrap items-start justify-between gap-4"><div><div class="flex items-center gap-2"><span id="pr-badge-num" class="font-mono text-xs rounded-md px-2 py-1 bg-indigo-400/10 border border-indigo-400/20 accent">PR #-</span><span id="pr-badge-state" class="text-xs rounded-md px-2 py-1 bg-emerald-400/10 border border-emerald-300/20 text-emerald-200">-</span></div><h2 id="pr-title" class="display text-xl font-semibold mt-3">-</h2><p class="text-sm muted mt-2">Author: <span id="pr-author" class="text-slate-200">-</span> <span class="mx-1">&#183;</span> <span id="pr-files-count">-</span> files changed</p></div><div id="pr-shape" class="text-xs muted"></div></div><div id="pr-files-list" class="flex flex-wrap gap-2 mt-5 pt-4 border-t hairline"></div></div>
+
+            <div id="readiness-card" class="rounded-xl p-5 border border-amber-300/20 bg-amber-300/5"><div class="flex items-center justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] text-amber-200 font-semibold">Review readiness</div><h2 id="readiness-title" class="display text-2xl font-semibold mt-2">-</h2></div><span id="readiness-badge" class="text-xs rounded-full px-3 py-1 bg-amber-400/10 text-amber-200 border border-amber-300/20">-</span></div><div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6"><div><div class="text-xs muted">Reviewer coverage</div><div id="readiness-coverage" class="text-xl font-semibold mt-1">-</div></div><div><div class="text-xs muted">Knowledge risk</div><div id="readiness-risk" class="text-xl font-semibold mt-1">-</div></div><div><div class="text-xs muted">Candidates</div><div id="readiness-candidates" class="text-xl font-semibold mt-1">-</div></div><div><div class="text-xs muted">Change shape</div><div id="readiness-shape" class="text-xl font-semibold mt-1">-</div></div></div></div>
+
+            <div class="panel rounded-xl p-5"><div class="flex items-start justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] accent font-semibold">Recommendation</div><h2 class="display text-2xl font-semibold mt-2">Who should review this?</h2><p id="rationale-text" class="text-sm muted mt-2"></p></div><span class="text-xs muted">Deterministic graph score</span></div><div id="top-reviewer-card" class="mt-5"></div><div id="alternatives" class="grid sm:grid-cols-2 gap-3 mt-4"></div></div>
+
+            <div id="risk-container"></div>
+
+            <div class="panel rounded-xl p-5"><div class="flex items-start justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] accent font-semibold">Evidence</div><h2 class="display text-2xl font-semibold mt-2">Why this answer?</h2><p class="text-sm muted mt-2">The recommendation follows connected review history, not a popularity guess.</p></div><button onclick="toggleEvidence()" id="evidence-toggle" class="text-xs accent hover:text-white">Show details</button></div><div id="evidence-details" class="hidden-view mt-5"><div id="graph-walk" class="panel-soft rounded-lg p-4 overflow-x-auto"></div><div id="explain-files" class="space-y-2 mt-4"></div></div></div>
+
+            <div class="panel rounded-xl p-5"><div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] text-emerald-300 font-semibold">Safe next step</div><h2 class="display text-2xl font-semibold mt-2">Apply a review plan</h2><p class="text-sm muted mt-2">Select the actions you approve. They will run only against the Keystone sandbox.</p></div><span class="text-xs rounded-full px-3 py-1 bg-emerald-400/10 border border-emerald-300/20 text-emerald-200">Human approval</span></div><div id="actions-container" class="space-y-2 mt-5"></div><button id="apply-plan-btn" onclick="applyApprovedPlan()" class="w-full accent-bg text-white rounded-lg px-4 py-3 mt-5 text-sm font-semibold">Apply selected plan</button><p class="text-[11px] muted mt-3">The source repository is never changed by this demo.</p></div>
+
+            <details class="panel-soft rounded-xl p-5"><summary class="cursor-pointer text-sm font-medium">Advanced graph details</summary><div id="trace-details" class="mt-4 text-xs muted font-mono space-y-2"></div><div id="network-summary" class="mt-4 text-xs muted"></div></details>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="hidden fixed bottom-5 right-5 max-w-sm rounded-lg border border-indigo-400/30 bg-[#151b27] px-4 py-3 text-sm text-slate-100 shadow-xl"></div>
+
+  <script>
+    let currentResult = null;
+    let currentRepo = null;
+    let ingestTimer = null;
+
+    const el = id => document.getElementById(id);
+    function showView(view) {
+      el('home-view').classList.toggle('hidden-view', view !== 'home');
+      el('analyze-view').classList.toggle('hidden-view', view !== 'analyze');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    function scrollToSection(id) { el(id).scrollIntoView({ behavior: 'smooth' }); }
+    function toast(message, error = false) {
+      const box = el('toast'); box.textContent = message; box.className = `fixed bottom-5 right-5 max-w-sm rounded-lg border px-4 py-3 text-sm shadow-xl ${error ? 'border-rose-400/30 bg-rose-950 text-rose-100' : 'border-indigo-400/30 bg-[#151b27] text-slate-100'}`;
+      setTimeout(() => box.classList.add('hidden'), 4500);
+    }
+    function setStatus(live, message) {
+      el('status-dot').classList.toggle('live', live); el('status-text').textContent = message; el('side-status').textContent = message;
+    }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('pr')) el('pr-input').value = params.get('pr');
+      await fetchStatus();
+      if (params.get('pr')) { showView('analyze'); await runInvestigation(); }
+    }
+    async function fetchStatus() {
+      try {
+        const response = await fetch('/api/status'); const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Graph unavailable');
+        const repos = data.repos || [];
+        const select = el('repo-select'); select.innerHTML = repos.map(repo => `<option value="${repo}">${repo}</option>`).join('');
+        currentRepo = new URLSearchParams(window.location.search).get('repo') || data.current_repo || repos[0] || null;
+        if (currentRepo && repos.includes(currentRepo)) select.value = currentRepo;
+        el('stat-nodes').textContent = (data.nodes || 0).toLocaleString(); el('stat-edges').textContent = (data.edges || 0).toLocaleString(); setStatus(Boolean(data.is_live), data.is_live ? 'Graph connected' : 'Graph offline'); renderProvenance(data.provenance || {});
+      } catch (error) { setStatus(false, 'Graph unavailable'); toast('Connect FalkorDB to analyze repository data.', true); }
+    }
+    function renderProvenance(provenance) {
+      const card = el('provenance-card'); const status = provenance.status || 'unknown';
+      const styles = { real: 'border-emerald-300/20 bg-emerald-300/5 text-emerald-100', empty: 'border-amber-300/20 bg-amber-300/5 text-amber-100', unmarked: 'border-amber-300/20 bg-amber-300/5 text-amber-100' };
+      const labels = { real: 'Real GitHub data', empty: 'No PR data yet', unmarked: 'Existing data, source unmarked', unknown: 'Source not confirmed' };
+      card.className = `rounded-lg border p-4 ${styles[status] || 'border-slate-700 bg-[#0b0d12] text-slate-200'}`;
+      card.innerHTML = `<div class="font-semibold">${labels[status] || labels.unknown}</div><div class="text-xs muted mt-2">${provenance.repository ? `Repository: ${provenance.repository}` : provenance.message || ''}</div>${provenance.last_ingested_at ? `<div class="text-xs muted mt-1">Last imported: ${provenance.last_ingested_at}</div>` : ''}`;
+    }
+    function setQuestion(question) { el('question-input').value = question; }
+    async function startMcpTunnel() {
+      const button = el('mcp-connect-btn'); button.disabled = true; button.textContent = 'Creating secure connection...'; el('mcp-status').classList.remove('hidden-view'); el('mcp-status-message').textContent = 'Creating a temporary HTTPS connection for Claude...';
+      try {
+        const response = await fetch('/api/mcp/tunnel/start', { method: 'POST' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not start secure connection');
+        pollMcpTunnel();
+      } catch (error) { button.disabled = false; button.textContent = 'Connect to Claude'; el('mcp-status-message').textContent = error.message; toast(error.message, true); }
+    }
+    function pollMcpTunnel() {
+      const timer = setInterval(async () => {
+        const response = await fetch('/api/mcp/tunnel/status'); const data = await response.json();
+        if (data.state === 'ready' && data.url) { clearInterval(timer); el('mcp-status-message').textContent = 'Secure connection ready. Copy this URL into Claude:'; el('mcp-url').textContent = data.url; el('mcp-url-row').classList.remove('hidden-view'); el('mcp-connect-btn').textContent = 'Claude connection ready'; el('mcp-connect-btn').disabled = false; }
+        else if (data.state === 'failed') { clearInterval(timer); el('mcp-status-message').textContent = data.error || 'Secure connection could not be created.'; el('mcp-connect-btn').textContent = 'Try again'; el('mcp-connect-btn').disabled = false; }
+      }, 1000);
+    }
+    function copyMcpUrl() {
+      const url = el('mcp-url').textContent; navigator.clipboard.writeText(url).then(() => toast('MCP URL copied.')).catch(() => toast(`Copy this MCP URL: ${url}`));
+    }
+    async function startIngest() {
+      const repository = el('ingest-repo').value.trim(); const limit = Number(el('ingest-limit').value || 100); const button = el('ingest-btn');
+      if (!repository) { toast('Enter a GitHub repository URL first.', true); return; }
+      button.disabled = true; button.textContent = 'Starting real ingestion...'; el('ingest-status').classList.remove('hidden-view'); el('ingest-message').textContent = 'Validating repository and connecting to GitHub...'; el('ingest-progress').style.width = '4%';
+      try {
+        const response = await fetch('/api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repository, limit }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not start ingestion');
+        pollIngest(data.job_id);
+      } catch (error) { button.disabled = false; button.textContent = 'Connect and ingest real PRs'; toast(error.message, true); }
+    }
+    function pollIngest(jobId) {
+      if (ingestTimer) clearInterval(ingestTimer);
+      ingestTimer = setInterval(async () => {
+        const response = await fetch(`/api/ingest/${jobId}`); const job = await response.json(); const imported = job.imported || 0; const limit = job.limit || 100;
+        el('ingest-message').textContent = job.message || 'Importing real GitHub data...'; el('ingest-count').textContent = `${imported} / ${limit} new PRs`; el('ingest-progress').style.width = `${Math.max(4, Math.min(100, Math.round(imported / limit * 100)))}%`;
+        if (job.state === 'complete' || job.state === 'failed') {
+          clearInterval(ingestTimer); ingestTimer = null; el('ingest-btn').disabled = false; el('ingest-btn').textContent = job.state === 'complete' ? 'Repository connected' : 'Retry ingestion';
+          if (job.state === 'complete') { await fetchStatus(); el('repo-select').value = job.repo; toast(`Connected ${job.repository}. ${imported} real PRs are ready to analyze.`); showView('analyze'); }
+          else toast(job.message || 'Ingestion failed.', true);
+        }
+      }, 1200);
+    }
+    async function runShowcase() { showView('analyze'); el('pr-input').value = 13997; el('question-input').value = 'Who should review this?'; await runInvestigation(); }
+    async function runInvestigation() {
+      const number = Number(el('pr-input').value || 13997); const question = el('question-input').value || 'Who should review this?'; currentRepo = el('repo-select').value || currentRepo || 'pydantic';
+      const button = el('run-btn'); button.disabled = true; el('btn-icon').textContent = ' ...'; el('empty-state').classList.remove('hidden-view'); el('result-content').classList.add('hidden-view');
+      try {
+        const response = await fetch('/api/investigate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pr_number: number, question, repo: currentRepo }) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Investigation failed'); currentResult = data; renderResult(data);
+        history.replaceState(null, '', `/?pr=${number}&repo=${encodeURIComponent(currentRepo)}`);
+      } catch (error) { toast(error.message, true); } finally { button.disabled = false; el('btn-icon').textContent = ''; }
+    }
+    function renderResult(data) {
+      el('empty-state').classList.add('hidden-view'); el('result-content').classList.remove('hidden-view');
+      const pr = data.pr_details || {}; const reviewers = data.decision?.reviewers || []; const flags = data.decision?.risk_flags || []; const files = pr.files || [];
+      el('pr-badge-num').textContent = `PR #${data.pr_number}`; el('pr-badge-state').textContent = pr.state || 'MERGED'; el('pr-title').textContent = pr.title || `Pull request #${data.pr_number}`; el('pr-author').textContent = pr.author || 'contributor'; el('pr-files-count').textContent = files.length; el('pr-shape').textContent = files.length > 1 ? 'Connected change across multiple files' : 'Focused change';
+      el('pr-files-list').innerHTML = files.map(file => `<span class="font-mono text-xs rounded-md px-2 py-1 bg-[#0b0d12] border hairline text-slate-300">${file}</span>`).join('');
+      const top = reviewers[0]; const coverage = top ? `${Math.min(top.shared_files || 0, files.length)} / ${files.length}` : `0 / ${files.length}`; const crossModule = new Set(files.map(file => file.split('/').slice(0, 2).join('/'))).size > 1;
+      el('readiness-title').textContent = flags.length ? 'Needs attention before review' : 'Ready for human review'; el('readiness-badge').textContent = flags.length ? 'Risk detected' : 'Good coverage'; el('readiness-coverage').textContent = coverage; el('readiness-risk').textContent = flags.length ? `${flags.length} flagged` : 'Low'; el('readiness-candidates').textContent = reviewers.length; el('readiness-shape').textContent = crossModule ? 'Cross-module' : 'Focused change';
+      el('readiness-card').className = `rounded-xl p-5 border ${flags.length ? 'border-amber-300/20 bg-amber-300/5' : 'border-emerald-300/20 bg-emerald-300/5'}`;
+      el('rationale-text').textContent = data.narration || data.decision?.rationale || '';
+      if (top) { el('top-reviewer-card').innerHTML = `<div class="rounded-xl border border-indigo-400/30 bg-indigo-400/10 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] accent font-semibold">Best connected match</div><div class="display text-3xl font-bold mt-2">@${top.login}</div><p class="text-sm muted mt-2">Knows ${top.shared_files} file${top.shared_files === 1 ? '' : 's'} in this change and reviewed ${top.recent_reviews} recent PRs.</p></div><div class="sm:text-right"><div class="text-xs muted">Graph score</div><div class="text-3xl font-mono font-semibold accent mt-1">${Number(top.score).toFixed(2)}</div></div></div>`; } else { el('top-reviewer-card').innerHTML = '<div class="rounded-xl border border-amber-300/20 bg-amber-300/5 p-5 text-sm text-amber-100">No reviewer has enough connected evidence yet. Use the risk details to guide a human assignment.</div>'; }
+      el('alternatives').innerHTML = reviewers.slice(1, 3).map((reviewer, index) => `<div class="panel-soft rounded-lg p-4"><div class="text-xs muted">Alternative ${index + 1}</div><div class="font-mono text-lg font-semibold mt-1">@${reviewer.login}</div><div class="text-xs muted mt-2">${reviewer.shared_files} shared files <span class="mx-1">&#183;</span> ${reviewer.recent_reviews} recent reviews <span class="mx-1">&#183;</span> score ${Number(reviewer.score).toFixed(2)}</div></div>`).join('');
+      el('risk-container').innerHTML = flags.length ? flags.map(flag => `<div class="rounded-xl border border-rose-300/20 bg-rose-300/5 p-4 mt-4"><div class="text-xs uppercase tracking-[.16em] text-rose-200 font-semibold">Knowledge risk detected</div><div class="font-mono text-sm text-rose-100 mt-2">${flag}</div></div>`).join('') : '<div class="rounded-xl border border-emerald-300/20 bg-emerald-300/5 p-4 mt-4 text-sm text-emerald-100">No knowledge coverage gaps or stale reviewer risks were detected for this change.</div>';
+      renderEvidence(data, top); renderActions(data); el('trace-details').innerHTML = (data.trace || []).map(line => `<div>&gt; ${line}</div>`).join(''); el('network-summary').textContent = `Graph neighborhood: ${files.length} touched files, ${reviewers.length} ranked reviewers, and ${data.explain_path?.via_prs?.length || 0} historical PR links.`;
+    }
+    function renderEvidence(data, top) {
+      const path = data.explain_path || {}; const files = path.files || []; const login = top?.login || 'candidate reviewer';
+      el('graph-walk').innerHTML = `<div class="font-mono text-sm whitespace-nowrap"><span class="text-indigo-200">PR #${data.pr_number}</span><span class="muted"> &rarr; touches &rarr; </span><span class="text-cyan-200">${files.length} shared files</span><span class="muted"> &rarr; historical PRs &rarr; </span><span class="text-emerald-200">@${login}</span></div>`;
+      el('explain-files').innerHTML = files.length ? files.map(file => `<div class="panel-soft rounded-lg p-3 flex flex-wrap justify-between gap-2 text-xs"><span class="font-mono text-slate-200">${file}</span><span class="muted">review evidence found</span></div>`).join('') : '<div class="text-sm muted">No shared-file path was found.</div>';
+    }
+    function toggleEvidence() { const details = el('evidence-details'); const hidden = details.classList.toggle('hidden-view'); el('evidence-toggle').textContent = hidden ? 'Show details' : 'Hide details'; }
+    function renderActions(data) {
+      const actions = data.proposed_actions || []; const container = el('actions-container'); const button = el('apply-plan-btn'); button.disabled = !actions.length; button.textContent = actions.length ? 'Apply selected plan' : 'No actions required';
+      container.innerHTML = actions.length ? actions.map((action, index) => { const target = action.who || action.label; return `<label class="panel-soft rounded-lg p-4 flex items-center gap-3 cursor-pointer hover:border-slate-500"><input type="checkbox" class="plan-action accent-indigo-500" data-action-index="${index}" checked><span><span class="text-xs uppercase tracking-wider accent font-semibold">${action.action.replace('_', ' ')}</span><span class="font-mono text-sm text-white ml-2">${target}</span><span class="block text-xs muted mt-1">Safe sandbox action for PR #${action.on}</span></span></label>`; }).join('') : '<div class="text-sm muted">Keystone has no action to recommend for this PR.</div>';
+    }
+    async function applyApprovedPlan() {
+      const selected = [...document.querySelectorAll('.plan-action:checked')].map(input => currentResult.proposed_actions[Number(input.dataset.actionIndex)]).filter(Boolean); if (!selected.length) { toast('Select at least one action first.', true); return; }
+      const button = el('apply-plan-btn'); button.disabled = true; button.textContent = 'Applying to sandbox...'; let complete = 0;
+      for (const action of selected) { const response = await fetch('/api/action/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }); const result = await response.json(); if (!result.ok) { toast(result.error || 'Sandbox action failed.', true); break; } complete += 1; }
+      button.disabled = false; button.textContent = complete ? `${complete} sandbox action${complete === 1 ? '' : 's'} applied` : 'Apply selected plan'; if (complete === selected.length) toast('Approved plan applied to the Keystone sandbox.');
+    }
+    init();
+  </script>
+</body>
+</html>

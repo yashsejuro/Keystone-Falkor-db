@@ -117,7 +117,7 @@ def _render_inbox(repo: str, repos: list[str], items: list[dict] | str) -> str:
         if item["score"] is not None:
             reviewer = f"{reviewer} ({item['score']:.2f})"
         rows.append(
-            "<tr>"
+            f'<tr data-risk="{item["risk"]}" data-search="{escape(str(item["number"]))} {escape(str(item["title"] or "")).lower()}">'
             f'<td><a href="{target}">#{item["number"]}</a></td>'
             f'<td><a href="{target}">{escape(str(item["title"] or ""))}</a></td>'
             f'<td><a href="{target}" style="color: {risk_colors[item["risk"]]}; font-weight: 700;">{item["risk"]}</a></td>'
@@ -135,26 +135,32 @@ def _render_inbox(repo: str, repos: list[str], items: list[dict] | str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Keystone PR inbox</title>
   <style>
-    body {{ margin: 0; background: #111827; color: #e5e7eb; font-family: Arial, sans-serif; }}
-    main {{ max-width: 1100px; margin: 0 auto; padding: 36px 24px; }}
-    h1 {{ margin: 0 0 24px; font-size: 24px; }}
-    select {{ margin-bottom: 20px; padding: 8px 10px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151; border-radius: 4px; }}
-    table {{ width: 100%; border-collapse: collapse; background: #1f2937; }}
+    body {{ margin: 0; background: #09090b; color: #e5e7eb; font-family: 'Segoe UI', sans-serif; }}
+    main {{ max-width: 1100px; margin: 0 auto; padding: 48px 24px; }}
+    h1 {{ margin: 0; font-size: 30px; letter-spacing: -0.02em; }}
+    .subtitle {{ color: #a1a1aa; margin: 8px 0 28px; font-size: 14px; }}
+    .toolbar {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }}
+    select, input {{ padding: 10px 12px; background: #18181b; color: #e5e7eb; border: 1px solid #3f3f46; border-radius: 6px; }}
+    input {{ flex: 1; min-width: 220px; }}
+    table {{ width: 100%; border-collapse: collapse; background: #18181b; border: 1px solid #27272a; border-radius: 8px; overflow: hidden; }}
     th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #374151; }}
     th {{ color: #9ca3af; font-size: 12px; text-transform: uppercase; }}
-    tr:hover {{ background: #273449; }}
+    tr:hover {{ background: #27272a; }}
     a {{ color: inherit; text-decoration: none; display: block; }}
     footer {{ margin-top: 20px; color: #9ca3af; font-size: 13px; }}
   </style>
 </head>
 <body>
   <main>
-    <h1>Keystone — {escape(repo)} PR inbox</h1>
-    <select onchange="location.href='/inbox?repo='+this.value" aria-label="Repository">
-      {options}
-    </select>
+        <h1>Knowledge risk queue</h1>
+        <p class="subtitle">Start with the pull requests most likely to need human context before review.</p>
+        <div class="toolbar">
+            <select onchange="location.href='/inbox?repo='+this.value" aria-label="Repository">{options}</select>
+            <input id="search" type="search" placeholder="Search PRs or titles" aria-label="Search PRs">
+            <select id="risk-filter" aria-label="Filter by risk"><option value="ALL">All risk levels</option><option value="HIGH">High risk</option><option value="MED">Medium risk</option><option value="LOW">Low risk</option></select>
+        </div>
     <script>
-      if (!new URLSearchParams(window.location.search).has('repo')) {{
+    if (!new URLSearchParams(window.location.search).has('repo')) {{
         const selectedRepo = document.querySelector('select[aria-label="Repository"]').value;
         if (selectedRepo) {{
           const url = new URL(window.location.href);
@@ -162,6 +168,15 @@ def _render_inbox(repo: str, repos: list[str], items: list[dict] | str) -> str:
           window.history.replaceState(null, '', url);
         }}
       }}
+            const filterRows = () => {{
+                const query = document.getElementById('search').value.toLowerCase();
+                const risk = document.getElementById('risk-filter').value;
+                document.querySelectorAll('tbody tr[data-risk]').forEach(row => {{
+                    row.style.display = (risk === 'ALL' || row.dataset.risk === risk) && row.dataset.search.includes(query) ? '' : 'none';
+                }});
+            }};
+            document.getElementById('search').addEventListener('input', filterRows);
+            document.getElementById('risk-filter').addEventListener('change', filterRows);
     </script>
     <table>
       <thead><tr><th>PR</th><th>Title</th><th>Risk</th><th>Top Reviewer</th><th>Last Merged</th></tr></thead>

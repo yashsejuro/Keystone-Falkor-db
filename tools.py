@@ -14,21 +14,24 @@ def get_pr(number: int, repo: str = DEFAULT_REPO) -> dict:
         """
         MATCH (pr:PullRequest {number: $n})
         OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
-        OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
+         OPTIONAL MATCH (pr)-[touch:TOUCHES]->(f:File)
         RETURN pr.number, pr.title, pr.state, pr.created_at, pr.merged_at,
                pr.additions, pr.deletions, pr.files_changed,
-               a.login, collect(DISTINCT f.path) AS files
+             a.login, collect(DISTINCT f.path) AS files,
+             sum(coalesce(touch.additions, 0)), sum(coalesce(touch.deletions, 0))
         """,
         {"n": number}, repo,
     )
     if not rows:
         return {}
     r = rows[0]
+    files = r[9] or []
     return {
         "number": r[0], "title": r[1], "state": r[2],
         "created_at": r[3], "merged_at": r[4],
-        "additions": r[5], "deletions": r[6], "files_changed": r[7],
-        "author": r[8], "files": r[9],
+        "additions": r[5] or r[10], "deletions": r[6] or r[11],
+        "files_changed": r[7] or len(files),
+        "author": r[8], "files": files,
     }
 
 
