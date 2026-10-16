@@ -13,14 +13,17 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastmcp.utilities.lifespan import combine_lifespans
+from starlette.concurrency import run_in_threadpool
 import uvicorn
 
-from graph_client import node_count, edge_count, get_connection_status, get_graph, list_repos, DEFAULT_REPO, register_repo, REPO_SLUGS
+from graph_client import node_count, edge_count, get_connection_status, get_graph, list_repos, DEFAULT_REPO, register_repo, REPO_SLUGS, graph_provenance
 from agent import run_keystone
-from tools import get_pr, explain_path, bus_factor_files, critical_files, default_cutoff, reviewer_candidates
+from tools import get_pr, explain_path, bus_factor_files, critical_files, default_cutoff, reviewer_candidates, graph_stats, sample_pr
 from scoring import score_reviewers
 from ingest_service import ingest_repository
 from mcp_server import mcp as keystone_mcp
+from memory import record_investigation, claim_action, get_action, finish_action, tracking_issue_number
+from actions import SANDBOX_REPO, plan_target, execute as execute_action
 
 try:
     from narration import narrate
@@ -1231,30 +1234,10 @@ async def api_status(repo: str = DEFAULT_REPO):
     try:
         status = get_connection_status()
         repos = list_repos()
-        provenance = {"status": "unknown", "message": "No ingestion provenance marker exists for this graph."}
         try:
-            rows = get_graph(repo).query(
-                "MATCH (m:KeystoneMetadata {key: 'provenance'}) "
-                "RETURN m.source, m.repository, m.last_ingested_at, m.last_import_count "
-                "ORDER BY m.last_ingested_at DESC LIMIT 1",
-                {},
-            ).result_set
-            if rows:
-                source, repository, ingested_at, imported = rows[0]
-                provenance = {
-                    "status": "real",
-                    "source": source,
-                    "repository": repository,
-                    "last_ingested_at": ingested_at,
-                    "last_import_count": imported,
-                    "message": "This graph contains data imported from the GitHub API.",
-                }
-            elif node_count(repo) > 0:
-                provenance = {"status": "unmarked", "message": "This graph already has data, but its original source was not recorded."}
-            else:
-                provenance = {"status": "empty", "message": "No pull request data has been ingested yet."}
+            provenance = graph_provenance(repo)
         except Exception:
-            pass
+            provenance = {"status": "unknown", "message": "Provenance could not be read."}
         return JSONResponse({
             "nodes": node_count(repo),
             "edges": edge_count(repo),
@@ -1263,6 +1246,8 @@ async def api_status(repo: str = DEFAULT_REPO):
             "is_live": status.get("is_live", False),
             "message": status.get("message", "FalkorDB"),
             "provenance": provenance,
+            "graph": graph_stats(repo),
+            "sample_pr": sample_pr(repo),
         })
     except Exception as e:
         return JSONResponse(
@@ -1407,25 +1392,29 @@ async def api_mcp_tunnel_status():
 async def api_investigate(req: Request):
     try:
         body = await req.json()
-        pr_num = int(body.get("pr_number", 13997))
+        if body.get("pr_number") in (None, ""):
+            return JSONResponse({"error": "Choose a pull request to investigate."}, status_code=400)
+        pr_num = int(body["pr_number"])
         repo = body.get("repo", DEFAULT_REPO)
+        if repo not in REPO_SLUGS:
+            return JSONResponse({"error": f"Unknown repository: {repo}"}, status_code=400)
         question = body.get("question", "who should review this?")
 
-        result = run_keystone(pr_num, question, repo=repo)
+        result = await run_in_threadpool(run_keystone, pr_num, question, repo=repo)
+        for action in result["proposed_actions"]:
+            action.update(plan_target(REPO_SLUGS[repo], pr_num))
+        # Only recorded investigations get action ids, so only they can be approved.
+        if body.get("record", True):
+            result["investigation_id"] = await run_in_threadpool(
+                record_investigation, result, repo=repo, source="ui")
         pr_info = get_pr(pr_num, repo=repo)
-
-        top_rev = "davidhewitt"
-        if result.get("decision", {}).get("reviewers"):
-            top_rev = result["decision"]["reviewers"][0]["login"]
-
-        path_info = explain_path(pr_num, top_rev, repo=repo)
         narration_text = narrate(result.get("decision", {}), pr_info)
 
         return JSONResponse({
             **result,
+            "repo_slug": REPO_SLUGS[repo],
             "pr_details": pr_info,
-            "explain_path": path_info,
-            "narration": narration_text
+            "narration": narration_text,
         })
     except Exception as e:
         return JSONResponse({"error": f"Investigation failed: {e}"}, status_code=500)
@@ -1476,29 +1465,53 @@ async def api_mcp_execute(req: Request):
         if tool_name == "get_pr":
             return JSONResponse(get_pr(int(params.get("number", 13997)), repo=repo))
         elif tool_name == "rank_reviewers":
-            return JSONResponse(score_reviewers(int(params.get("pr_number", 13997)), cutoff, repo=repo))
+            if params.get("pr_number") in (None, ""):
+                return JSONResponse({"error": "pr_number is required."}, status_code=400)
+            return JSONResponse(score_reviewers(int(params["pr_number"]), cutoff, repo=repo))
         elif tool_name == "bus_factor_files":
             return JSONResponse(bus_factor_files(cutoff, int(params.get("min_reviews", 5)), repo=repo))
         elif tool_name == "critical_files":
             return JSONResponse(critical_files(int(params.get("limit", 10)), repo=repo))
         elif tool_name == "explain_path":
-            return JSONResponse(explain_path(int(params.get("pr_number", 13997)), str(params.get("reviewer", "davidhewitt")), repo=repo))
+            if params.get("pr_number") in (None, "") or not params.get("reviewer"):
+                return JSONResponse({"error": "pr_number and reviewer are required."}, status_code=400)
+            return JSONResponse(explain_path(int(params["pr_number"]), str(params["reviewer"]), repo=repo))
         else:
             return JSONResponse({"error": f"Unknown tool: {tool_name}"}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
 
+def _execute_approved(action_id: str, repo: str) -> tuple[dict, int]:
+    action = claim_action(action_id, repo)
+    if action is None:
+        current = get_action(action_id, repo)
+        if current is None:
+            return {"ok": False, "error": "No proposed action with that id."}, 404
+        if current.get("status") == "executed":
+            return {"ok": True, "already_executed": True, "mode": current.get("mode"),
+                    "url": current.get("url"), "target_repo": current.get("target_repo"),
+                    "target_number": current.get("target_number")}, 200
+        return {"ok": False, "error": f"Action is already {current.get('status')}."}, 409
+    try:
+        hint = tracking_issue_number(action["pr"], SANDBOX_REPO, repo)
+        outcome = execute_action(action, REPO_SLUGS[repo], hint)
+    except Exception as exc:
+        outcome = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finish_action(action_id, outcome, repo)
+    return outcome, 200 if outcome["ok"] else 502
+
+
 @app.post("/api/action/execute")
 async def api_action_execute(req: Request):
-    """Execute an approved action against the sandbox repo."""
-    try:
-        body = await req.json()
-        action = body.get("action", {})
-        from actions import execute as exec_action
-        result = exec_action(action)
-        return JSONResponse(result)
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+    """Execute one human-approved action from the graph ledger. Idempotent per action id."""
+    body = await req.json()
+    action_id = str(body.get("action_id") or "")
+    repo = body.get("repo", DEFAULT_REPO)
+    if not action_id or repo not in REPO_SLUGS:
+        return JSONResponse({"ok": False, "error": "action_id and a known repo are required."},
+                            status_code=400)
+    content, status = await run_in_threadpool(_execute_approved, action_id, repo)
+    return JSONResponse(content, status_code=status)
 
 
 

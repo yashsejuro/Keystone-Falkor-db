@@ -47,12 +47,72 @@ def _fetch(session: requests.Session, url: str, params: dict | None = None):
     return response.json()
 
 
-def _mark_provenance(graph, repo_slug: str, imported: int):
+# Pairs of files that only ever appear together in one PR are noise from large
+# refactor PRs; betweenness on that graph is meaningless. Two or more shared PRs
+# is the signal threshold the shipped graphs (pydantic, fastapi) were built with.
+MIN_CO_OCCURRENCES = 2
+
+CO_CHANGES_QUERY = """
+MATCH (pr:PullRequest)-[:TOUCHES]->(a:File), (pr)-[:TOUCHES]->(b:File)
+WHERE a.path < b.path
+WITH a, b, count(pr) AS co
+WHERE co >= $min_co
+MERGE (a)-[c:CO_CHANGES]->(b)
+MERGE (b)-[d:CO_CHANGES]->(a)
+SET c.count = co, c.weight = co, d.count = co, d.weight = co
+"""
+
+
+def build_co_changes(graph, min_co: int = MIN_CO_OCCURRENCES) -> int:
+    """Derive (File)-[:CO_CHANGES {weight, count}]-(File) from PR file co-occurrence.
+
+    Edges are written in both directions. Co-change is symmetric, and FalkorDB only
+    supports directed shortestPath, so a one-directional edge set would make half the
+    reachable pairs look disconnected to both the algorithm and the path query.
+
+    Recomputes every pair from the full graph, so it is idempotent and safe to run
+    after each import. Without these edges algo.betweenness has no subgraph to walk,
+    shortest-path explainability has nothing to traverse, and the critical-file tool
+    returns nothing.
+    """
+    graph.query(CO_CHANGES_QUERY, {"min_co": min_co})
+    graph.query(
+        "MATCH ()-[c:CO_CHANGES]->() WHERE c.weight < $min_co DELETE c", {"min_co": min_co}
+    )
+    return graph.query("MATCH ()-[c:CO_CHANGES]->() RETURN count(c)").result_set[0][0]
+
+
+def materialize_file_centrality(graph) -> int:
+    """Write normalised betweenness onto File nodes as f.centrality.
+
+    The algorithm result is stored in the graph so reviewer scoring can weight a
+    candidate's knowledge by how structurally load-bearing a file is, in one Cypher
+    round trip, instead of a separate panel the decision path never consults.
+    """
+    rows = graph.query(
+        "CALL algo.betweenness({nodeLabels: ['File'], relationshipTypes: ['CO_CHANGES']}) "
+        "YIELD node, score RETURN node.path, score"
+    ).result_set
+    if not rows:
+        return 0
+    highest = max(r[1] for r in rows) or 1
+    payload = [{"path": r[0], "c": round(r[1] / highest, 6)} for r in rows]
+    for i in range(0, len(payload), 200):
+        graph.query(
+            "UNWIND $rows AS r MATCH (f:File {path: r.path}) SET f.centrality = r.c",
+            {"rows": payload[i:i + 200]},
+        )
+    return len(payload)
+
+
+def _mark_provenance(graph, repo_slug: str, imported: int, co_changes: int = 0, scored_files: int = 0):
     graph.query(
         "MERGE (m:KeystoneMetadata {key: 'provenance'}) "
         "SET m.source = 'GitHub API', m.repository = $repo, "
-        "m.last_ingested_at = $at, m.last_import_count = $count",
-        {"repo": repo_slug, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "count": imported},
+        "m.last_ingested_at = $at, m.last_import_count = $count, "
+        "m.co_changes_edges = $co, m.scored_files = $scored",
+        {"repo": repo_slug, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+         "count": imported, "co": co_changes, "scored": scored_files},
     )
 
 
@@ -185,15 +245,25 @@ def ingest_repository(repo_slug: str, limit: int = 100, progress: Progress | Non
             update("importing", f"Imported real merged PR #{pr['number']}")
         page += 1
 
-    _mark_provenance(graph, repo_slug, imported)
+    co_changes = build_co_changes(graph)
+    scored_files = materialize_file_centrality(graph)
+    _mark_provenance(graph, repo_slug, imported, co_changes, scored_files)
     total = graph.query("MATCH (pr:PullRequest) RETURN count(pr)").result_set[0][0]
     update("complete", f"Finished. {imported} new PRs added; {total} real PRs are available for analysis.")
-    return {"repo": repo_key, "repository": repo_slug, "imported": imported, "skipped": skipped, "total": total}
+    return {"repo": repo_key, "repository": repo_slug, "imported": imported,
+            "skipped": skipped, "total": total, "co_changes_edges": co_changes,
+            "scored_files": scored_files}
 
 
 if __name__ == "__main__":
     import sys
 
-    target = sys.argv[1] if len(sys.argv) > 1 else "pydantic/pydantic"
-    amount = int(sys.argv[2]) if len(sys.argv) > 2 else 100
-    print(ingest_repository(target, amount))
+    if len(sys.argv) > 2 and sys.argv[1] == "backfill":
+        from graph_client import get_graph
+        g = get_graph(sys.argv[2])
+        print(build_co_changes(g), "co-change edges;",
+              materialize_file_centrality(g), "files centrality-scored")
+    else:
+        target = sys.argv[1] if len(sys.argv) > 1 else "pydantic/pydantic"
+        amount = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+        print(ingest_repository(target, amount))

@@ -65,18 +65,18 @@
 
         <div class="panel rounded-2xl p-5 sm:p-7 shadow-2xl shadow-black/20">
           <div class="flex items-center justify-between border-b hairline pb-4">
-            <div><div class="text-xs uppercase tracking-[.16em] muted">A typical Keystone answer</div><div class="display text-lg font-semibold mt-1">PR #13997 needs context</div></div>
-            <span class="text-xs rounded-full px-2.5 py-1 bg-amber-400/10 border border-amber-300/20 text-amber-200">Needs attention</span>
+            <div><div class="text-xs uppercase tracking-[.16em] muted">A live Keystone answer</div><div class="display text-lg font-semibold mt-1" id="hero-title">Loading the newest analyzed PR...</div></div>
+            <span class="text-xs rounded-full px-2.5 py-1 bg-amber-400/10 border border-amber-300/20 text-amber-200" id="hero-badge">Live</span>
           </div>
           <div class="py-6">
             <div class="text-xs muted">Recommended reviewer</div>
-            <div class="display text-3xl font-bold mt-1">@davidhewitt</div>
-            <p class="text-sm muted mt-2">Strongest connected knowledge for this change.</p>
+            <div class="display text-3xl font-bold mt-1" id="hero-reviewer">--</div>
+            <p class="text-sm muted mt-2" id="hero-note">Computed from the connected review graph, not a fixed example.</p>
           </div>
           <div class="grid grid-cols-3 gap-3 border-y hairline py-4">
-            <div><div class="text-xl font-semibold accent">3</div><div class="text-[11px] muted mt-1">shared files</div></div>
-            <div><div class="text-xl font-semibold accent">6</div><div class="text-[11px] muted mt-1">recent reviews</div></div>
-            <div><div class="text-xl font-semibold text-amber-200">2</div><div class="text-[11px] muted mt-1">risk flags</div></div>
+            <div><div class="text-xl font-semibold accent" id="hero-shared">--</div><div class="text-[11px] muted mt-1">shared files</div></div>
+            <div><div class="text-xl font-semibold accent" id="hero-hops">--</div><div class="text-[11px] muted mt-1">graph hops</div></div>
+            <div><div class="text-xl font-semibold text-amber-200" id="hero-flags">--</div><div class="text-[11px] muted mt-1">risk flags</div></div>
           </div>
           <div class="flex items-center gap-3 mt-5 text-xs muted"><span class="w-2 h-2 rounded-full bg-indigo-400"></span>PR <span>&#8594;</span><span class="w-2 h-2 rounded-full bg-cyan-400"></span>files <span>&#8594;</span><span class="w-2 h-2 rounded-full bg-emerald-400"></span>reviewer</div>
         </div>
@@ -169,7 +169,7 @@
 
             <div class="panel rounded-xl p-5"><div class="flex items-start justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] accent font-semibold">Evidence</div><h2 class="display text-2xl font-semibold mt-2">Why this answer?</h2><p class="text-sm muted mt-2">The recommendation follows connected review history, not a popularity guess.</p></div><button onclick="toggleEvidence()" id="evidence-toggle" class="text-xs accent hover:text-white">Show details</button></div><div id="evidence-details" class="hidden-view mt-5"><div id="graph-walk" class="panel-soft rounded-lg p-4 overflow-x-auto"></div><div id="explain-files" class="space-y-2 mt-4"></div></div></div>
 
-            <div class="panel rounded-xl p-5"><div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] text-emerald-300 font-semibold">Safe next step</div><h2 class="display text-2xl font-semibold mt-2">Apply a review plan</h2><p class="text-sm muted mt-2">Select the actions you approve. They will run only against the Keystone sandbox.</p></div><span class="text-xs rounded-full px-3 py-1 bg-emerald-400/10 border border-emerald-300/20 text-emerald-200">Human approval</span></div><div id="actions-container" class="space-y-2 mt-5"></div><button id="apply-plan-btn" onclick="applyApprovedPlan()" class="w-full accent-bg text-white rounded-lg px-4 py-3 mt-5 text-sm font-semibold">Apply selected plan</button><p class="text-[11px] muted mt-3">The source repository is never changed by this demo.</p></div>
+            <div class="panel rounded-xl p-5"><div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4"><div><div class="text-xs uppercase tracking-[.16em] text-emerald-300 font-semibold">Safe next step</div><h2 class="display text-2xl font-semibold mt-2">Apply a review plan</h2><p id="plan-mode-note" class="text-sm muted mt-2">Select the actions you approve.</p></div><span class="text-xs rounded-full px-3 py-1 bg-emerald-400/10 border border-emerald-300/20 text-emerald-200">Human approval</span></div><div id="actions-container" class="space-y-2 mt-5"></div><button id="apply-plan-btn" onclick="applyApprovedPlan()" class="w-full accent-bg text-white rounded-lg px-4 py-3 mt-5 text-sm font-semibold">Approve and apply selected</button><p class="text-[11px] muted mt-3">Nothing runs until you approve it. Every proposal and outcome is stored as an Action node in the FalkorDB graph.</p></div>
 
             <details class="panel-soft rounded-xl p-5"><summary class="cursor-pointer text-sm font-medium">Advanced graph details</summary><div id="trace-details" class="mt-4 text-xs muted font-mono space-y-2"></div><div id="network-summary" class="mt-4 text-xs muted"></div></details>
           </div>
@@ -184,8 +184,10 @@
     let currentResult = null;
     let currentRepo = null;
     let ingestTimer = null;
+    let heroPr = null;
 
     const el = id => document.getElementById(id);
+    const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     function showView(view) {
       el('home-view').classList.toggle('hidden-view', view !== 'home');
       el('analyze-view').classList.toggle('hidden-view', view !== 'analyze');
@@ -215,7 +217,30 @@
         currentRepo = new URLSearchParams(window.location.search).get('repo') || data.current_repo || repos[0] || null;
         if (currentRepo && repos.includes(currentRepo)) select.value = currentRepo;
         el('stat-nodes').textContent = (data.nodes || 0).toLocaleString(); el('stat-edges').textContent = (data.edges || 0).toLocaleString(); setStatus(Boolean(data.is_live), data.is_live ? 'Graph connected' : 'Graph offline'); renderProvenance(data.provenance || {});
-      } catch (error) { setStatus(false, 'Graph unavailable'); toast('Connect FalkorDB to analyze repository data.', true); }
+        heroPr = data.sample_pr || heroPr;
+        if (data.graph) el('stat-edges').textContent = `${(data.edges || 0).toLocaleString()} (${(data.graph.co_change_edges || 0).toLocaleString()} co-change)`;
+        loadHeroExample();
+      } catch (error) { setStatus(false, 'Graph unavailable'); el('hero-title').textContent = 'Graph unavailable'; el('hero-reviewer').textContent = '--'; toast('Connect FalkorDB to analyze repository data.', true); }
+    }
+    async function loadHeroExample() {
+      if (!heroPr) { el('hero-title').textContent = 'No analyzed PR yet'; el('hero-reviewer').textContent = '--'; el('hero-note').textContent = 'Connect a repository to see a live answer.'; return; }
+      try {
+        const response = await fetch('/api/investigate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pr_number: heroPr, question: 'Who should review this?', repo: currentRepo, record: false }) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Investigation failed');
+        const top = (data.decision?.reviewers || [])[0];
+        const flags = data.decision?.risk_flags || [];
+        el('hero-title').textContent = `PR #${heroPr} needs context`;
+        el('hero-badge').textContent = flags.length ? 'Needs attention' : 'Coverage looks healthy';
+        el('hero-reviewer').textContent = top ? `@${top.login}` : 'No candidate above threshold';
+        el('hero-shared').textContent = top ? top.shared_files : '--';
+        el('hero-hops').textContent = data.explain_path?.hops ?? '--';
+        el('hero-flags').textContent = flags.length;
+        el('hero-note').textContent = top
+          ? `${top.bridge_files} co-changing files link their review history to this change.`
+          : 'Keystone found no reviewer with connected evidence for this change.';
+      } catch (error) {
+        el('hero-reviewer').textContent = '--'; el('hero-note').textContent = `Live example unavailable: ${error.message}`;
+      }
     }
     function renderProvenance(provenance) {
       const card = el('provenance-card'); const status = provenance.status || 'unknown';
@@ -263,7 +288,7 @@
         }
       }, 1200);
     }
-    async function runShowcase() { showView('analyze'); el('pr-input').value = 13997; el('question-input').value = 'Who should review this?'; await runInvestigation(); }
+    async function runShowcase() { showView('analyze'); el('pr-input').value = heroPr || ''; el('question-input').value = 'Who should review this?'; await runInvestigation(); }
     async function runInvestigation() {
       const number = Number(el('pr-input').value || 13997); const question = el('question-input').value || 'Who should review this?'; currentRepo = el('repo-select').value || currentRepo || 'pydantic';
       const button = el('run-btn'); button.disabled = true; el('btn-icon').textContent = ' ...'; el('empty-state').classList.remove('hidden-view'); el('result-content').classList.add('hidden-view');
@@ -277,7 +302,7 @@
       el('empty-state').classList.add('hidden-view'); el('result-content').classList.remove('hidden-view');
       const pr = data.pr_details || {}; const reviewers = data.decision?.reviewers || []; const flags = data.decision?.risk_flags || []; const files = pr.files || [];
       el('pr-badge-num').textContent = `PR #${data.pr_number}`; el('pr-badge-state').textContent = pr.state || 'MERGED'; el('pr-title').textContent = pr.title || `Pull request #${data.pr_number}`; el('pr-author').textContent = pr.author || 'contributor'; el('pr-files-count').textContent = files.length; el('pr-shape').textContent = files.length > 1 ? 'Connected change across multiple files' : 'Focused change';
-      el('pr-files-list').innerHTML = files.map(file => `<span class="font-mono text-xs rounded-md px-2 py-1 bg-[#0b0d12] border hairline text-slate-300">${file}</span>`).join('');
+      el('pr-files-list').innerHTML = files.map(file => `<span class="font-mono text-xs rounded-md px-2 py-1 bg-[#0b0d12] border hairline text-slate-300">${esc(file)}</span>`).join('');
       const top = reviewers[0]; const coverage = top ? `${Math.min(top.shared_files || 0, files.length)} / ${files.length}` : `0 / ${files.length}`; const crossModule = new Set(files.map(file => file.split('/').slice(0, 2).join('/'))).size > 1;
       el('readiness-title').textContent = flags.length ? 'Needs attention before review' : 'Ready for human review'; el('readiness-badge').textContent = flags.length ? 'Risk detected' : 'Good coverage'; el('readiness-coverage').textContent = coverage; el('readiness-risk').textContent = flags.length ? `${flags.length} flagged` : 'Low'; el('readiness-candidates').textContent = reviewers.length; el('readiness-shape').textContent = crossModule ? 'Cross-module' : 'Focused change';
       el('readiness-card').className = `rounded-xl p-5 border ${flags.length ? 'border-amber-300/20 bg-amber-300/5' : 'border-emerald-300/20 bg-emerald-300/5'}`;
@@ -288,20 +313,55 @@
       renderEvidence(data, top); renderActions(data); el('trace-details').innerHTML = (data.trace || []).map(line => `<div>&gt; ${line}</div>`).join(''); el('network-summary').textContent = `Graph neighborhood: ${files.length} touched files, ${reviewers.length} ranked reviewers, and ${data.explain_path?.via_prs?.length || 0} historical PR links.`;
     }
     function renderEvidence(data, top) {
-      const path = data.explain_path || {}; const files = path.files || []; const login = top?.login || 'candidate reviewer';
-      el('graph-walk').innerHTML = `<div class="font-mono text-sm whitespace-nowrap"><span class="text-indigo-200">PR #${data.pr_number}</span><span class="muted"> &rarr; touches &rarr; </span><span class="text-cyan-200">${files.length} shared files</span><span class="muted"> &rarr; historical PRs &rarr; </span><span class="text-emerald-200">@${login}</span></div>`;
-      el('explain-files').innerHTML = files.length ? files.map(file => `<div class="panel-soft rounded-lg p-3 flex flex-wrap justify-between gap-2 text-xs"><span class="font-mono text-slate-200">${file}</span><span class="muted">review evidence found</span></div>`).join('') : '<div class="text-sm muted">No shared-file path was found.</div>';
+      const path = data.explain_path || {}; const nodes = path.path_nodes || []; const edges = path.path_edges || [];
+      const color = { PullRequest: 'text-indigo-200', File: 'text-cyan-200', Person: 'text-emerald-200' };
+      const chips = nodes.map((node, i) => {
+        const edge = i ? edges.find(e => (e.from === i - 1 && e.to === i) || (e.from === i && e.to === i - 1)) : null;
+        const link = edge ? `<span class="muted"> ${edge.from === i - 1 ? `&mdash;${edge.type}&rarr;` : `&larr;${edge.type}&mdash;`} </span>` : '';
+        return `${link}<span class="${color[node.type] || ''}">${esc(node.type === 'Person' ? `@${node.label}` : node.label)}</span>`;
+      }).join('');
+      const how = path.evidence === 'shortestPath'
+        ? `FalkorDB shortestPath() through ${path.co_change_hops} CO_CHANGES hop${path.co_change_hops === 1 ? '' : 's'}`
+        : 'Direct review history, the shortest possible path once this PR\'s own reviews are excluded';
+      el('graph-walk').innerHTML = nodes.length
+        ? `<div class="text-xs muted mb-2">${how} &middot; ${path.hops} hops</div><div class="font-mono text-sm whitespace-nowrap">${chips}</div>`
+        : `<div class="text-sm muted">No connected path was found for ${esc(top?.login || 'the candidate reviewer')}.</div>`;
+      const rows = [
+        ...(path.files || []).map(file => `<div class="panel-soft rounded-lg p-3 flex flex-wrap justify-between gap-2 text-xs"><span class="font-mono text-slate-200">${esc(file)}</span><span class="muted">reviewed directly</span></div>`),
+        ...(path.bridges || []).map(b => `<div class="panel-soft rounded-lg p-3 flex flex-wrap justify-between gap-2 text-xs"><span class="font-mono text-slate-200">${esc(b.from)} &harr; ${esc(b.to)}</span><span class="muted">co-changed ${b.weight}&times; &middot; centrality ${b.centrality} &middot; via PR #${esc(b.via_pr)}</span></div>`),
+      ];
+      el('explain-files').innerHTML = rows.join('') || '<div class="text-sm muted">No shared-file or co-change evidence was found.</div>';
     }
     function toggleEvidence() { const details = el('evidence-details'); const hidden = details.classList.toggle('hidden-view'); el('evidence-toggle').textContent = hidden ? 'Show details' : 'Hide details'; }
     function renderActions(data) {
-      const actions = data.proposed_actions || []; const container = el('actions-container'); const button = el('apply-plan-btn'); button.disabled = !actions.length; button.textContent = actions.length ? 'Apply selected plan' : 'No actions required';
-      container.innerHTML = actions.length ? actions.map((action, index) => { const target = action.who || action.label; return `<label class="panel-soft rounded-lg p-4 flex items-center gap-3 cursor-pointer hover:border-slate-500"><input type="checkbox" class="plan-action accent-indigo-500" data-action-index="${index}" checked><span><span class="text-xs uppercase tracking-wider accent font-semibold">${action.action.replace('_', ' ')}</span><span class="font-mono text-sm text-white ml-2">${target}</span><span class="block text-xs muted mt-1">Safe sandbox action for PR #${action.on}</span></span></label>`; }).join('') : '<div class="text-sm muted">Keystone has no action to recommend for this PR.</div>';
+      const actions = data.proposed_actions || []; const container = el('actions-container'); const button = el('apply-plan-btn');
+      const approvable = Boolean(data.investigation_id) && actions.every(action => action.id);
+      const mode = actions[0]?.mode;
+      el('plan-mode-note').textContent = !actions.length ? 'Keystone has no action to recommend for this PR.'
+        : mode === 'direct' ? `Direct mode: approved actions are applied to ${actions[0].target} on GitHub.`
+        : `Shadow mode: ${data.repo_slug} is not in KEYSTONE_WRITE_REPOS, so approved actions go to a tracking issue in the Keystone sandbox and nobody upstream is notified.`;
+      button.disabled = !actions.length || !approvable; button.textContent = !actions.length ? 'No actions required' : approvable ? 'Approve and apply selected' : 'Plan was not recorded';
+      container.innerHTML = actions.map((action, index) => {
+        const target = action.action === 'request_review' ? `@${action.who}` : action.label;
+        const badge = action.mode === 'direct' ? 'border-amber-300/30 text-amber-200' : 'border-slate-500/40 text-slate-300';
+        return `<label class="panel-soft rounded-lg p-4 flex items-start gap-3 cursor-pointer hover:border-slate-500"><input type="checkbox" class="plan-action accent-indigo-500 mt-1" data-action-index="${index}" checked><span class="min-w-0"><span class="text-xs uppercase tracking-wider accent font-semibold">${esc(action.action.replace('_', ' '))}</span><span class="font-mono text-sm text-white ml-2">${esc(target)}</span><span class="ml-2 text-[10px] uppercase tracking-wider rounded border px-1.5 py-0.5 ${badge}">${esc(action.mode)}</span><span class="block text-xs muted mt-1">${esc(action.reason)}</span><span class="block text-[11px] muted mt-1">Lands on: ${esc(action.target)}</span><span id="action-result-${index}" class="block text-[11px] mt-1"></span></span></label>`;
+      }).join('');
     }
     async function applyApprovedPlan() {
-      const selected = [...document.querySelectorAll('.plan-action:checked')].map(input => currentResult.proposed_actions[Number(input.dataset.actionIndex)]).filter(Boolean); if (!selected.length) { toast('Select at least one action first.', true); return; }
-      const button = el('apply-plan-btn'); button.disabled = true; button.textContent = 'Applying to sandbox...'; let complete = 0;
-      for (const action of selected) { const response = await fetch('/api/action/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }); const result = await response.json(); if (!result.ok) { toast(result.error || 'Sandbox action failed.', true); break; } complete += 1; }
-      button.disabled = false; button.textContent = complete ? `${complete} sandbox action${complete === 1 ? '' : 's'} applied` : 'Apply selected plan'; if (complete === selected.length) toast('Approved plan applied to the Keystone sandbox.');
+      const inputs = [...document.querySelectorAll('.plan-action:checked')]; if (!inputs.length) { toast('Select at least one action first.', true); return; }
+      const button = el('apply-plan-btn'); button.disabled = true; button.textContent = 'Applying approved actions...'; let complete = 0; let failed = 0;
+      for (const input of inputs) {
+        const index = Number(input.dataset.actionIndex); const action = currentResult.proposed_actions[index]; const out = el(`action-result-${index}`);
+        try {
+          const response = await fetch('/api/action/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action_id: action.id, repo: currentRepo }) });
+          const result = await response.json(); if (!result.ok) throw new Error(result.error || 'Action failed');
+          complete += 1; input.checked = false; input.disabled = true;
+          const link = String(result.url || '').startsWith('https://') ? ` <a class="accent underline" href="${esc(result.url)}" target="_blank" rel="noopener">View on GitHub</a>` : '';
+          out.innerHTML = `<span class="text-emerald-300">${result.already_executed ? 'Already applied' : `Applied (${esc(result.mode)})`}</span>${link}`;
+        } catch (error) { failed += 1; out.innerHTML = `<span class="text-rose-300">${esc(error.message)}</span>`; }
+      }
+      button.disabled = false; button.textContent = failed ? 'Retry failed actions' : `${complete} action${complete === 1 ? '' : 's'} applied`;
+      toast(failed ? `${failed} action${failed === 1 ? '' : 's'} failed. See the details above.` : 'Approved actions applied and recorded in the graph.', Boolean(failed));
     }
     init();
   </script>

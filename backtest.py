@@ -1,17 +1,23 @@
 """Backtest: prove the graph scorer beats baselines at predicting reviewers.
 
 Time-based split, no leakage. All methods only see training-window data.
+
+`relational_ablation` is the identical scorer with the CO_CHANGES and betweenness
+term removed. The gap between it and `graph_scorer` is the measured contribution of
+graph traversal, which is the question a graph-database sponsor asks.
 """
-from operator import truth
-from operator import truth
-import statistics
+import json
 from datetime import datetime, timedelta, timezone
-from graph_client import get_graph
-from tools import reviewer_candidates, _rows
+from pathlib import Path
+from graph_client import node_count, edge_count, graph_provenance
+from tools import _rows
+
+METHODS = ["baseline_frequent", "baseline_directory", "relational_ablation", "graph_scorer"]
 
 
 TRAIN_DAYS = 90        # graph data before this is "training"
 TEST_SAMPLE = 60       # number of test PRs to evaluate on
+LOCK = Path(__file__).with_name("benchmark_lock.json")
 
 
 def _iso(dt):
@@ -127,13 +133,15 @@ def baseline_directory(cutoff_dt, pr_number, topk=3):
 
 def graph_scorer(cutoff_dt, pr_number, topk=3):
     from scoring import score_reviewers
-    results = score_reviewers(pr_number, _iso(cutoff_dt))
+    results = score_reviewers(pr_number, _iso(cutoff_dt), use_graph=True)
     return [r["login"] for r in results[:topk]]
 
 
-def vector_only(cutoff_dt, pr_number, topk=3):
-    """Stub: same as directory baseline for now. Vector search is Day 3."""
-    return baseline_directory(cutoff_dt, pr_number, topk)
+def relational_ablation(cutoff_dt, pr_number, topk=3):
+    """Same scorer, same data, graph term switched off."""
+    from scoring import score_reviewers
+    results = score_reviewers(pr_number, _iso(cutoff_dt), use_graph=False)
+    return [r["login"] for r in results[:topk]]
 
 
 # ---------- PR classification ----------
@@ -152,7 +160,7 @@ def classify_pr(pr_number, cutoff_dt):
 # ---------- Backtest ----------
 
 def evaluate(cutoff_dt, test_prs):
-    methods = ["baseline_frequent", "baseline_directory", "vector_only", "graph_scorer"]
+    methods = METHODS
     hits_top1 = {m: 0 for m in methods}
     hits_top3 = {m: 0 for m in methods}
     by_type = {}
@@ -171,17 +179,16 @@ def evaluate(cutoff_dt, test_prs):
         preds = {
             "baseline_frequent": freq,
             "baseline_directory": baseline_directory(cutoff_dt, n, topk=3),
-            "vector_only": vector_only(cutoff_dt, n, topk=3),
+            "relational_ablation": relational_ablation(cutoff_dt, n, topk=3),
             "graph_scorer": graph_scorer(cutoff_dt, n, topk=3),
         }
 
         ptype = classify_pr(n, cutoff_dt)
-        if ptype not in by_type:
-            by_type[ptype] = {
-                "n": 0,
-                "top1": {m: 0 for m in methods},
-                "top3": {m: 0 for m in methods},
-            }
+        by_type.setdefault(ptype, {
+            "n": 0,
+            "top1": {m: 0 for m in methods},
+            "top3": {m: 0 for m in methods},
+        })
         by_type[ptype]["n"] += 1
 
         for m in methods:
@@ -214,7 +221,7 @@ def evaluate(cutoff_dt, test_prs):
 
 
 def print_table(results):
-    methods = ["baseline_frequent", "baseline_directory", "vector_only", "graph_scorer"]
+    methods = METHODS
     print(f"\nEvaluated on {results['n']} test PRs\n")
     print(f"{'method':<22} {'top1':>8} {'top3':>8}")
     print("-" * 40)
@@ -236,9 +243,51 @@ def print_table(results):
     return md
 
 
+def _git_rev() -> str:
+    import subprocess
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                              timeout=10, cwd=str(LOCK.parent)).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def resolve_eval_set(cutoff_dt):
+    """Reuse a pinned cutoff and PR set so reported numbers stay reproducible.
+
+    The cutoff is rolling, so an unpinned benchmark silently changes as the training
+    window slides and results stop matching the README.
+    """
+    if LOCK.exists():
+        lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        cutoff_dt = datetime.fromisoformat(lock["cutoff"])
+        numbers = lock["test_prs"]
+        print(f"Using pinned benchmark: cutoff {lock['cutoff']}, {len(numbers)} test PRs")
+        return cutoff_dt, [{"number": n} for n in numbers], False
+
+    test_prs = get_test_prs(cutoff_dt, TEST_SAMPLE)
+    LOCK.write_text(json.dumps({
+        "cutoff": _iso(cutoff_dt),
+        "test_prs": [tp["number"] for tp in test_prs],
+        "train_days": TRAIN_DAYS,
+        "repo": "pydantic",
+        "graph": {
+            "nodes": node_count(),
+            "edges": edge_count(),
+            "provenance": graph_provenance(),
+        },
+        "git_rev": _git_rev(),
+        "pinned_at": _iso(datetime.now(timezone.utc)),
+    }, indent=2), encoding="utf-8")
+    print(f"Pinned benchmark to {LOCK.name}")
+    return cutoff_dt, test_prs, True
+
+
 if __name__ == "__main__":
     cutoff = split_data()
-    test_prs = get_test_prs(cutoff, TEST_SAMPLE)
+    cutoff, test_prs, freshly_pinned = resolve_eval_set(cutoff)
     print(f"Test PRs: {len(test_prs)}\n")
     results = evaluate(cutoff, test_prs)
     print_table(results)
+    if freshly_pinned:
+        print("Re-run to evaluate against the pinned set.")

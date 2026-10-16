@@ -3,9 +3,14 @@ No LLM in the decision path. Optional LLM narration later."""
 from datetime import datetime, timezone
 from tools import (
     get_pr, reviewer_candidates, bus_factor_files,
-    critical_files, default_cutoff,
+    critical_files, default_cutoff, pr_criticality, explain_path,
 )
 from scoring import score_reviewers
+
+
+# A PR touching a file in the top betweenness tier concentrates risk regardless of
+# how well-reviewed it is, so this is checked independently of the bus-factor flags.
+CRITICAL_PATH_THRESHOLD = 0.5
 
 
 def plan(pr_number: int, question: str = "who should review this?", repo: str = "pydantic") -> list[str]:
@@ -36,8 +41,9 @@ def plan(pr_number: int, question: str = "who should review this?", repo: str = 
     return tools
 
 
-def run_tools(pr_number: int, planned: list[str], repo: str = "pydantic") -> dict:
-    cutoff = default_cutoff()
+def run_tools(pr_number: int, planned: list[str], repo: str = "pydantic",
+              cutoff: str | None = None) -> dict:
+    cutoff = cutoff or default_cutoff()
     obs = {}
     if "rank_reviewers" in planned:
         obs["rank_reviewers"] = score_reviewers(pr_number, cutoff, repo=repo)
@@ -54,54 +60,84 @@ def decide(pr_number: int, obs: dict, repo: str = "pydantic") -> dict:
     top2 = ranked[:2]
 
     pr = get_pr(pr_number, repo=repo)
-    pr_files = set(pr.get("files", []))
+    pr_files = sorted(set(pr.get("files", [])))
 
     bf = {b["path"]: b for b in obs.get("bus_factor_files", [])}
-    flags = []
+    risks = []
     for f in pr_files:
         if f in bf:
-            flags.append(f"risk:coverage-gap:{f}")
+            b = bf[f]
+            risks.append({"flag": f"risk:coverage-gap:{f}", "label": "risk:coverage-gap",
+                          "detail": f"{f}: {b['sole_reviewer']} did {b['sole_count']} of "
+                                    f"{b['total']} recent reviews"})
     if top2 and top2[0]["last_review"]:
         try:
             t = datetime.fromisoformat(top2[0]["last_review"].replace("Z", "+00:00"))
             days = (datetime.now(timezone.utc) - t).days
             if days > 180:
-                flags.append("risk:stale-reviewer")
+                risks.append({"flag": "risk:stale-reviewer", "label": "risk:stale-reviewer",
+                              "detail": f"top reviewer last reviewed {days} days ago"})
         except Exception:
             pass
 
-    rationale = (
-        f"Top candidate {top2[0]['login']} shares "
-        f"{top2[0]['shared_files']} files with this PR and reviewed "
-        f"{top2[0]['recent_reviews']} PRs recently."
-        if top2 else "No candidate above threshold."
-    )
+    # Betweenness output is materialised on File nodes at ingest time, so centrality
+    # of the changed files is a graph-derived risk signal in the decision itself.
+    criticality = pr_criticality(pr_number, repo=repo)
+    if criticality["max_centrality"] >= CRITICAL_PATH_THRESHOLD:
+        risks.append({"flag": "risk:critical-path", "label": "risk:critical-path",
+                      "detail": f"changed files peak at {criticality['max_centrality']} "
+                                f"normalised betweenness (threshold {CRITICAL_PATH_THRESHOLD})"})
+
+    top = top2[0] if top2 else None
+    if top:
+        rationale = (
+            f"Top candidate {top['login']} shares {top['shared_files']} files with this PR "
+            f"and reviewed {top['recent_reviews']} PRs recently. Structural affinity "
+            f"{top['structural']} comes from {top['bridge_files']} co-changing files; "
+            f"changed files peak at {criticality['max_centrality']} betweenness centrality."
+        )
+    else:
+        rationale = "No candidate above threshold."
 
     return {
         "reviewers": top2,
-        "risk_flags": flags,
+        "risk_flags": [r["flag"] for r in risks],
+        "risks": risks,
+        "criticality": criticality,
         "rationale": rationale,
     }
 
 
-def propose_actions(pr_number: int, decision: dict) -> list[dict]:
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def propose_actions(pr_number: int, decision: dict, evidence: dict | None = None) -> list[dict]:
+    evidence = evidence or {}
     actions = []
-    for r in decision["reviewers"]:
+    for rank, r in enumerate(decision["reviewers"], start=1):
+        path = evidence.get(r["login"]) or {}
         actions.append({
             "action": "request_review",
             "who": r["login"],
             "on": pr_number,
+            "rank": rank,
+            "reason": (f"rank {rank}, score {r['score']:.2f}: {_count(r['shared_files'], 'shared file')}, "
+                       f"{_count(r['bridge_files'], 'co-change bridge file')}, "
+                       f"{_count(r['recent_reviews'], 'recent review')}"),
+            "evidence": path.get("evidence", "none"),
+            "hops": path.get("hops"),
+            "evidence_path": path.get("path", []),
         })
-    labels = set()
-    for flag in decision["risk_flags"]:
-        parts = flag.split(":")
-        label = ":".join(parts[:2]) if len(parts) >= 2 else flag
-        labels.add(label)
-    for label in labels:
+    details_by_label: dict[str, list[str]] = {}
+    for risk in decision.get("risks", []):
+        details_by_label.setdefault(risk["label"], []).append(risk["detail"])
+    for label, details in details_by_label.items():
         actions.append({
             "action": "add_label",
             "label": label,
             "on": pr_number,
+            "reason": "; ".join(details),
         })
     return actions
 
@@ -109,11 +145,12 @@ def propose_actions(pr_number: int, decision: dict) -> list[dict]:
 def run_keystone(pr_number: int, question: str = "who should review this?", repo: str = "pydantic") -> dict:
     trace = []
     trace.append(f"START: PR #{pr_number} on {repo}, question='{question}'")
+    cutoff = default_cutoff()
 
     planned = plan(pr_number, question=question, repo=repo)
     trace.append(f"PLAN: {planned}")
 
-    obs = run_tools(pr_number, planned, repo=repo)
+    obs = run_tools(pr_number, planned, repo=repo, cutoff=cutoff)
     counts = ", ".join(
         f"{k} -> {len(v) if isinstance(v, list) else 'ok'}"
         for k, v in obs.items()
@@ -127,7 +164,18 @@ def run_keystone(pr_number: int, question: str = "who should review this?", repo
         f"flags={decision['risk_flags']}"
     )
 
-    actions = propose_actions(pr_number, decision)
+    evidence = {
+        r["login"]: explain_path(pr_number, r["login"], repo=repo, cutoff_iso=cutoff)
+        for r in decision["reviewers"]
+    }
+    for login, ep in evidence.items():
+        trace.append(
+            f"EVIDENCE {login}: {ep['evidence']} over {ep['hops']} hops: {' -> '.join(ep['path'])}"
+            if ep["path"] else f"EVIDENCE {login}: no connected path found"
+        )
+    top_evidence = evidence.get(decision["reviewers"][0]["login"]) if decision["reviewers"] else None
+
+    actions = propose_actions(pr_number, decision, evidence)
     trace.append(f"ACT: proposed {len(actions)} actions (awaiting approval)")
 
     return {
@@ -137,6 +185,8 @@ def run_keystone(pr_number: int, question: str = "who should review this?", repo
         "trace": trace,
         "observations": obs,
         "decision": decision,
+        "explain_path": top_evidence,
+        "reviewer_evidence": evidence,
         "proposed_actions": actions,
     }
 
