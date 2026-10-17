@@ -1,8 +1,8 @@
 # test_flag.py
-from tools import bus_factor_files, default_cutoff, get_pr
-from scoring import score_reviewers
-from agent import run_keystone
-from graph_client import get_graph
+from backend.tools import bus_factor_files, default_cutoff, get_pr
+from backend.scoring import score_reviewers
+from backend.agent import run_keystone
+from backend.graph_client import get_graph
 
 cutoff = default_cutoff()
 print("=== BUS FACTOR FILES ===")

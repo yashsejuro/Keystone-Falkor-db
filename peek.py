@@ -1,5 +1,5 @@
 # peek.py
-from graph_client import get_graph
+from backend.graph_client import get_graph
 g = get_graph()
 
 print("Sample PR numbers:")

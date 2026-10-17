@@ -9,8 +9,8 @@ graph traversal, which is the question a graph-database sponsor asks.
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from graph_client import node_count, edge_count, graph_provenance
-from tools import _rows
+from backend.graph_client import node_count, edge_count, graph_provenance
+from backend.tools import _rows
 
 METHODS = ["baseline_frequent", "baseline_directory", "relational_ablation", "graph_scorer"]
 

@@ -1,7 +1,7 @@
 # test_run.py
-from tools import get_pr, default_cutoff
-from scoring import score_reviewers
-from agent import run_keystone
+from backend.tools import get_pr, default_cutoff
+from backend.scoring import score_reviewers
+from backend.agent import run_keystone
 
 PR = 14000
 
