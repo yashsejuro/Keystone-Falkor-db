@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Keystone — FastMCP Agent Tools Explorer</title>
+  <meta name="description" content="Explore Keystone's graph algorithms and agent tools exposed via FastMCP for Claude Desktop, Cursor, and autonomous AI agents.">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="min-h-screen flex flex-col antialiased">
+  <div class="bg-orbs"></div>
+
+  <!-- Navbar -->
+  <header class="sticky top-0 z-40" style="background: rgba(6, 7, 14, 0.85); backdrop-filter: blur(20px); border-bottom: 1px solid var(--line);">
+    <div class="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <a href="/" class="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black text-white hover:opacity-90 transition"
+           style="background: linear-gradient(135deg, #6366f1, #7c3aed); box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);">
+          K
+        </a>
+        <div>
+          <div class="flex items-center gap-2">
+            <a href="/" class="font-bold text-base text-white tracking-tight hover:text-indigo-300 transition">Keystone</a>
+            <span class="badge badge-brand text-[10px]">FastMCP Protocol</span>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-0.5">Model Context Protocol Server for Graph-Guided Agents</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <a href="/" class="btn-secondary text-xs px-4 py-2">
+          <span>←</span> Back to Keystone App
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-[1400px] mx-auto px-6 py-10 flex-1 w-full relative z-10 space-y-10">
+
+    <!-- Header info banner -->
+    <div class="glass p-8 space-y-4">
+      <div class="flex items-center gap-2">
+        <span class="badge badge-brand text-xs">⚡ FastMCP Server Architecture</span>
+        <span class="badge badge-ok text-xs">Stream Transport: /mcp/stream</span>
+      </div>
+      <h1 class="text-3xl font-extrabold text-white">
+        Graph Algorithms as <span class="gradient-text">Agent MCP Tools</span>
+      </h1>
+      <p class="text-slate-300 text-sm max-w-3xl leading-relaxed">
+        Keystone exposes its multi-hop graph algorithms as standardized <strong>Model Context Protocol (MCP)</strong> tools.
+        LLM agents (such as Claude Desktop, Cursor, or autonomous pipelines) can autonomously call shortest-path traversals,
+        betweenness centrality rankings, and reviewer affinities directly from FalkorDB.
+      </p>
+    </div>
+
+    <!-- Client Config Guide -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="glass p-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <span>💻</span> Claude Desktop Setup
+          </h2>
+          <span class="text-[11px] font-mono text-slate-400">claude_desktop_config.json</span>
+        </div>
+        <p class="text-xs text-slate-400">Add Keystone to your Claude Desktop config to enable graph tools in chat:</p>
+        <pre class="p-4 rounded-xl text-xs font-mono text-indigo-200 overflow-x-auto" style="background: rgba(6, 7, 14, 0.7); border: 1px solid var(--line);"><code>{
+  "mcpServers": {
+    "keystone": {
+      "command": "python",
+      "args": [
+        "c:\\Keystone-Falkor-db\\mcp_server.py"
+      ]
+    }
+  }
+}</code></pre>
+      </div>
+
+      <div class="glass p-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <span>🖱️</span> Cursor IDE Setup
+          </h2>
+          <span class="text-[11px] font-mono text-slate-400">.cursor/mcp.json</span>
+        </div>
+        <p class="text-xs text-slate-400">Configure Cursor to route agent review reasoning through Keystone:</p>
+        <pre class="p-4 rounded-xl text-xs font-mono text-indigo-200 overflow-x-auto" style="background: rgba(6, 7, 14, 0.7); border: 1px solid var(--line);"><code>{
+  "mcpServers": {
+    "keystone": {
+      "command": "python",
+      "args": ["backend/mcp_server.py"]
+    }
+  }
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- Live Interactive Tool Playground -->
+    <div class="glass p-8 space-y-6">
+      <div class="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h2 class="text-xl font-bold text-white flex items-center gap-2">
+            <span>🧪</span> Live MCP Tool Playground
+          </h2>
+          <p class="text-xs text-slate-400 mt-1">Test each graph algorithm tool interactively through the REST execution bridge</p>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-slate-400 font-medium">Repository:</span>
+          <select id="playground-repo" class="font-mono text-indigo-300 font-bold bg-transparent border border-slate-700 px-3 py-1.5 rounded-xl cursor-pointer">
+            <option value="pydantic">pydantic</option>
+            <option value="fastapi">fastapi</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Tools Grid -->
+      <div id="tools-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+
+      <!-- Results Terminal -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span class="font-mono font-semibold text-indigo-300" id="tool-result-title">Execution Output</span>
+          <span class="font-mono" id="tool-result-status">Idle</span>
+        </div>
+        <pre id="tool-output" class="p-5 rounded-xl text-xs font-mono text-slate-300 overflow-x-auto max-h-96"
+             style="background: rgba(6, 7, 14, 0.85); border: 1px solid var(--line);">Select a tool above to run an interactive query against FalkorDB.</pre>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="text-center py-6 text-xs text-slate-500 relative z-10" style="border-top: 1px solid var(--line);">
+    Keystone FastMCP Architecture · Built on FalkorDB · Track 01 Hackathon
+  </footer>
+
+  <script src="/js/api.js"></script>
+  <script>
+    async function loadPlayground() {
+      try {
+        const data = await KeystoneAPI.getMCPTools();
+        const container = document.getElementById('tools-container');
+        container.innerHTML = data.tools.map(t => `
+          <div class="stat-card space-y-3 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between">
+                <span class="font-mono font-bold text-indigo-400 text-sm">${t.name}</span>
+                <span class="badge badge-brand text-[9px]">TOOL</span>
+              </div>
+              <p class="text-xs text-slate-400 mt-2 leading-relaxed">${t.description}</p>
+            </div>
+            <button onclick="runTool('${t.name}', ${JSON.stringify(t.example).replace(/"/g, '&quot;')})"
+                    class="btn-primary text-xs py-2 w-full mt-3">
+              ⚡ Test ${t.name}()
+            </button>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function runTool(toolName, params) {
+      const repo = document.getElementById('playground-repo').value;
+      const titleEl = document.getElementById('tool-result-title');
+      const statusEl = document.getElementById('tool-result-status');
+      const outputEl = document.getElementById('tool-output');
+
+      titleEl.innerText = `${toolName}(${JSON.stringify({ ...params, repo })})`;
+      statusEl.innerText = "Executing on FalkorDB...";
+      outputEl.innerText = "Querying graph algorithms...";
+
+      try {
+        const res = await KeystoneAPI.executeMCPTool(toolName, params, repo);
+        statusEl.innerText = "Success (200 OK)";
+        outputEl.innerText = JSON.stringify(res, null, 2);
+      } catch (err) {
+        statusEl.innerText = "Error";
+        outputEl.innerText = err.message;
+      }
+    }
+
+    window.onload = loadPlayground;
+  </script>
+</body>
+</html>
