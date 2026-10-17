@@ -1,6 +1,9 @@
 """All graph queries live here. Every function returns plain Python data.
 No synthetic fallbacks. If FalkorDB is unreachable, queries raise."""
-from graph_client import get_graph, DEFAULT_REPO, validate_repo
+try:
+    from backend.graph_client import get_graph, DEFAULT_REPO, validate_repo
+except ImportError:
+    from graph_client import get_graph, DEFAULT_REPO, validate_repo
 from datetime import datetime, timedelta, timezone
 
 
@@ -293,30 +296,73 @@ def sample_pr(repo: str = DEFAULT_REPO) -> int | None:
     return rows[0][0] if rows else None
 
 
-def list_recent_prs(limit: int = 25, repo: str = DEFAULT_REPO) -> list[dict]:
-    """Return real merged pull requests from FalkorDB for the specified repository."""
+def list_recent_prs(limit: int = 500, repo: str = DEFAULT_REPO, q: str | None = None, filter_by: str = "all") -> list[dict]:
+    """Return real merged pull requests from FalkorDB for the specified repository.
+    Supports up to 500 PRs with search and review status filtering.
+    """
     rows = _rows(
         """
         MATCH (pr:PullRequest)
         WHERE pr.merged_at IS NOT NULL
         OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
         OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
-        RETURN pr.number, pr.title, pr.merged_at, a.login, count(DISTINCT f) AS file_count
+        OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) WHERE r.is_bot = false
+        WITH pr, a, count(DISTINCT f) AS file_count, count(DISTINCT r) AS reviewer_count
+        RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count
         ORDER BY pr.number DESC
         LIMIT $limit
         """,
-        {"limit": limit}, repo=repo,
+        {"limit": limit or 500}, repo=repo,
     )
-    return [
+    results = [
         {
             "number": int(r[0]),
             "title": str(r[1] or f"PR #{r[0]}"),
             "merged_at": str(r[2]) if r[2] else None,
             "author": str(r[3] or "contributor"),
             "file_count": int(r[4] or 0),
+            "reviewer_count": int(r[5] or 0),
+            "is_reviewed": int(r[5] or 0) > 0,
         }
         for r in rows
     ]
+
+    if q:
+        q_lower = q.lower().strip()
+        results = [
+            p for p in results
+            if q_lower in str(p["number"]) or q_lower in p["title"].lower() or q_lower in p["author"].lower()
+        ]
+
+    if filter_by == "reviewed":
+        results = [p for p in results if p["reviewer_count"] > 0]
+    elif filter_by == "unreviewed":
+        results = [p for p in results if p["reviewer_count"] == 0]
+
+    return results
+
+
+def get_repo_pr_stats(repo: str = DEFAULT_REPO) -> dict:
+    """Return statistical summary of all ingested pull requests in the repository."""
+    rows = _rows(
+        """
+        MATCH (pr:PullRequest)
+        OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) WHERE r.is_bot = false
+        WITH pr, count(DISTINCT r) AS rev_count
+        RETURN count(pr) AS total_prs,
+               sum(CASE WHEN rev_count > 0 THEN 1 ELSE 0 END) AS reviewed_prs,
+               sum(CASE WHEN rev_count = 0 THEN 1 ELSE 0 END) AS unreviewed_prs
+        """,
+        repo=repo
+    )
+    if not rows:
+        return {"total": 0, "reviewed": 0, "unreviewed": 0}
+    total, reviewed, unreviewed = rows[0]
+    return {
+        "total": int(total or 0),
+        "reviewed": int(reviewed or 0),
+        "unreviewed": int(unreviewed or 0),
+    }
 
 
 def default_cutoff(days: int = 90) -> str:

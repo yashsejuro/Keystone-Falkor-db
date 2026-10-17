@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from backend.graph_client import node_count, edge_count, graph_provenance
 from backend.tools import _rows
+from backend.scoring import score_reviewers
 
 METHODS = ["baseline_frequent", "baseline_directory", "relational_ablation", "graph_scorer"]
 
@@ -132,14 +133,12 @@ def baseline_directory(cutoff_dt, pr_number, topk=3):
 # ---------- Graph scorer (uses existing module) ----------
 
 def graph_scorer(cutoff_dt, pr_number, topk=3):
-    from scoring import score_reviewers
     results = score_reviewers(pr_number, _iso(cutoff_dt), use_graph=True)
     return [r["login"] for r in results[:topk]]
 
 
 def relational_ablation(cutoff_dt, pr_number, topk=3):
     """Same scorer, same data, graph term switched off."""
-    from scoring import score_reviewers
     results = score_reviewers(pr_number, _iso(cutoff_dt), use_graph=False)
     return [r["login"] for r in results[:topk]]
 

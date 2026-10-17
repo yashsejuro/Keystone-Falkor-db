@@ -9,8 +9,10 @@ const KeystoneAPI = {
     return res.json();
   },
 
-  async getPRs(repo, limit = 30) {
-    const res = await fetch(`/api/prs?repo=${encodeURIComponent(repo)}&limit=${limit}`);
+  async getPRs(repo, limit = 500, q = '', filterBy = 'all') {
+    let url = `/api/prs?repo=${encodeURIComponent(repo)}&limit=${limit}&filter_by=${encodeURIComponent(filterBy)}`;
+    if (q) url += `&q=${encodeURIComponent(q)}`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error((await res.json()).error || 'PRs failed');
     return res.json();
   },

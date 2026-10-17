@@ -6,7 +6,10 @@ real work rather than acting as a store for joins.
 """
 import math
 from datetime import datetime, timezone
-from tools import reviewer_candidates, graph_affinity, DEFAULT_REPO
+try:
+    from backend.tools import reviewer_candidates, graph_affinity, DEFAULT_REPO
+except ImportError:
+    from tools import reviewer_candidates, graph_affinity, DEFAULT_REPO
 
 WEIGHTS_RELATIONAL = {"shared": 0.60, "recent": 0.20, "recency": 0.20}
 WEIGHTS_GRAPH = {"shared": 0.30, "structural": 0.30, "recent": 0.20, "recency": 0.20}

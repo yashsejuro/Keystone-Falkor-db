@@ -1,16 +1,28 @@
 """Keystone MCP server. Exposes graph tools over stdio for Claude Desktop,
 Cursor, or any MCP client."""
 from fastmcp import FastMCP
-from graph_client import graph_provenance
-from tools import (
-    get_pr as _get_pr,
-    reviewer_candidates as _candidates,
-    bus_factor_files as _bf,
-    critical_files as _critical,
-    explain_path as _explain,
-    default_cutoff,
-)
-from scoring import score_reviewers
+try:
+    from backend.graph_client import graph_provenance
+    from backend.tools import (
+        get_pr as _get_pr,
+        reviewer_candidates as _candidates,
+        bus_factor_files as _bf,
+        critical_files as _critical,
+        explain_path as _explain,
+        default_cutoff,
+    )
+    from backend.scoring import score_reviewers
+except ImportError:
+    from graph_client import graph_provenance
+    from tools import (
+        get_pr as _get_pr,
+        reviewer_candidates as _candidates,
+        bus_factor_files as _bf,
+        critical_files as _critical,
+        explain_path as _explain,
+        default_cutoff,
+    )
+    from scoring import score_reviewers
 
 mcp = FastMCP("keystone")
 

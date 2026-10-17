@@ -1,11 +1,17 @@
 """Keystone agent: plan -> tools -> decide -> propose actions.
 No LLM in the decision path. Optional LLM narration later."""
-from datetime import datetime, timezone
-from tools import (
-    get_pr, reviewer_candidates, bus_factor_files,
-    critical_files, default_cutoff, pr_criticality, explain_path,
-)
-from scoring import score_reviewers
+try:
+    from backend.tools import (
+        get_pr, reviewer_candidates, bus_factor_files,
+        critical_files, default_cutoff, pr_criticality, explain_path,
+    )
+    from backend.scoring import score_reviewers
+except ImportError:
+    from tools import (
+        get_pr, reviewer_candidates, bus_factor_files,
+        critical_files, default_cutoff, pr_criticality, explain_path,
+    )
+    from scoring import score_reviewers
 
 
 # A PR touching a file in the top betweenness tier concentrates risk regardless of

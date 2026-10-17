@@ -137,29 +137,148 @@ function renderBenchmarkButtons() {
   `).join('');
 }
 
+let currentPrFilterTab = 'all';
+let prSearchQuery = '';
+let prStats = { total: 0, reviewed: 0, unreviewed: 0 };
+
 async function fetchPRs(repo) {
   try {
     const feedLabel = document.getElementById('pr-feed-count');
-    if (feedLabel) feedLabel.innerText = "Loading...";
-    const data = await KeystoneAPI.getPRs(repo, 30);
+    if (feedLabel) feedLabel.innerText = "Loading 500 PRs...";
+    const data = await KeystoneAPI.getPRs(repo, 500);
     availablePRs = data.prs || [];
-    if (feedLabel) feedLabel.innerText = `${availablePRs.length} PRs`;
-    const selectEl = document.getElementById('pr-select');
-    if (selectEl) {
-      if (availablePRs.length > 0) {
-        selectEl.innerHTML = availablePRs.map(pr => `
-          <option value="${pr.number}">#${pr.number}: ${pr.title.slice(0, 45)}${pr.title.length > 45 ? '…' : ''} (@${pr.author})</option>
-        `).join('');
-      } else {
-        selectEl.innerHTML = `<option value="">No PRs in graph</option>`;
-      }
-    }
+    prStats = data.stats || { total: availablePRs.length, reviewed: 0, unreviewed: 0 };
+    if (feedLabel) feedLabel.innerText = `${availablePRs.length} PRs in Graph`;
+
+    updatePrFilterCounts();
+    renderPrDropdown();
   } catch (err) {
     console.error("PRs load error", err);
     const feedLabel = document.getElementById('pr-feed-count');
     if (feedLabel) feedLabel.innerText = "Unavailable";
     notify("Unable to load pull requests.", "error");
   }
+}
+
+function updatePrFilterCounts() {
+  const pillAll = document.getElementById('pr-count-all');
+  const pillRev = document.getElementById('pr-count-reviewed');
+  const pillUnrev = document.getElementById('pr-count-unreviewed');
+  if (pillAll) pillAll.innerText = prStats.total || availablePRs.length;
+  if (pillRev) pillRev.innerText = prStats.reviewed || availablePRs.filter(p => p.is_reviewed).length;
+  if (pillUnrev) pillUnrev.innerText = prStats.unreviewed || availablePRs.filter(p => !p.is_reviewed).length;
+}
+
+function setPrFilterTab(tab) {
+  currentPrFilterTab = tab;
+  ['all', 'reviewed', 'unreviewed'].forEach(t => {
+    const el = document.getElementById(`pr-filter-tab-${t}`);
+    if (el) {
+      if (t === tab) {
+        el.className = "badge badge-brand cursor-pointer";
+      } else {
+        el.className = "badge cursor-pointer";
+        el.style.background = "rgba(255,255,255,0.04)";
+        el.style.color = "var(--text-muted)";
+      }
+    }
+  });
+  renderPrDropdown();
+  renderTriageTable();
+}
+
+function filterPrDropdown(q) {
+  prSearchQuery = (q || '').toLowerCase().trim();
+  renderPrDropdown();
+  renderTriageTable();
+}
+
+function getFilteredPRs() {
+  return availablePRs.filter(p => {
+    if (currentPrFilterTab === 'reviewed' && !p.is_reviewed) return false;
+    if (currentPrFilterTab === 'unreviewed' && p.is_reviewed) return false;
+    if (prSearchQuery) {
+      const matchNum = String(p.number).includes(prSearchQuery);
+      const matchTitle = (p.title || '').toLowerCase().includes(prSearchQuery);
+      const matchAuthor = (p.author || '').toLowerCase().includes(prSearchQuery);
+      return matchNum || matchTitle || matchAuthor;
+    }
+    return true;
+  });
+}
+
+function renderPrDropdown() {
+  const selectEl = document.getElementById('pr-select');
+  if (!selectEl) return;
+  const filtered = getFilteredPRs();
+  if (filtered.length === 0) {
+    selectEl.innerHTML = `<option value="">No PRs matching query</option>`;
+    return;
+  }
+  selectEl.innerHTML = filtered.slice(0, 100).map(pr => `
+    <option value="${pr.number}">
+      #${pr.number}: ${pr.title.slice(0, 48)}${pr.title.length > 48 ? '…' : ''} (@${pr.author} · ${pr.file_count}f · ${pr.is_reviewed ? '✓' + pr.reviewer_count + ' rev' : 'unreviewed'})
+    </option>
+  `).join('');
+
+  const currentVal = parseInt(document.getElementById('pr-input')?.value);
+  if (currentVal && filtered.some(p => p.number === currentVal)) {
+    selectEl.value = currentVal;
+  }
+}
+
+function openPrTriageModal() {
+  const modal = document.getElementById('pr-triage-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+    renderTriageTable();
+    document.body.style.overflow = 'hidden';
+  }
+}
+
+function closePrTriageModal() {
+  const modal = document.getElementById('pr-triage-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+}
+
+function renderTriageTable() {
+  const tbody = document.getElementById('triage-table-body');
+  const countBadge = document.getElementById('triage-count-badge');
+  if (!tbody) return;
+  const filtered = getFilteredPRs();
+  if (countBadge) countBadge.innerText = `${filtered.length} of ${availablePRs.length} PRs`;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-slate-500 text-xs">No pull requests match the current search or filter.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.slice(0, 200).map(pr => `
+    <tr class="reviewer-row" style="border-bottom: 1px solid var(--line);">
+      <td class="py-2.5 px-3 font-mono font-bold text-indigo-400">#${pr.number}</td>
+      <td class="py-2.5 px-3 text-white font-medium max-w-[340px] truncate" title="${pr.title}">${pr.title}</td>
+      <td class="py-2.5 px-3 text-slate-300 font-mono text-[11px]">@${pr.author}</td>
+      <td class="py-2.5 px-3 text-slate-400 font-mono text-[11px]">${pr.file_count} files</td>
+      <td class="py-2.5 px-3">
+        ${pr.is_reviewed
+          ? `<span class="badge badge-ok text-[9px] font-mono">✓ ${pr.reviewer_count} reviewer${pr.reviewer_count > 1 ? 's' : ''}</span>`
+          : `<span class="badge badge-warn text-[9px] font-mono">Unreviewed</span>`}
+      </td>
+      <td class="py-2.5 px-3 text-right">
+        <button onclick="selectAndAnalyzePr(${pr.number})" class="btn-primary text-xs px-3 py-1">
+          ⚡ Analyze
+        </button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function selectAndAnalyzePr(num) {
+  closePrTriageModal();
+  selectPr(num);
 }
 
 function onSelectPrFromDropdown(val) {
@@ -224,12 +343,89 @@ function setRunButtonState(isBusy, labelText = "Run Knowledge Analysis", iconTex
   label.innerText = labelText;
 }
 
+let simulatedExcludedReviewer = null;
+
+function onWhatIfChange(val) {
+  simulatedExcludedReviewer = val || null;
+  if (currentResult) {
+    renderResult(currentResult);
+    if (simulatedExcludedReviewer) {
+      notify(`Simulating absence of @${simulatedExcludedReviewer}. Re-routing active!`, "default");
+    } else {
+      notify("Simulation reset. Normal routing restored.", "default");
+    }
+  }
+}
+
+function copyGitHubDossier() {
+  if (!currentResult) return;
+  const pr = currentResult.pr_details || {};
+  const metrics = currentResult.pr_metrics || {};
+  const reviewers = currentResult.decision?.reviewers || [];
+  const primary = reviewers[0] || { login: 'unassigned', score: 0, shared_files: 0 };
+  const secondary = reviewers[1] || { login: 'unassigned', score: 0 };
+  const bfFiles = metrics.bus_factor_files || [];
+  const peakC = metrics.criticality?.max_centrality || 0.0;
+  const rationale = currentResult.narration || currentResult.decision?.rationale || "Graph-directed decision";
+
+  const md = `### 🛡️ Keystone Graph PR Review Routing Report
+> **FalkorDB Multi-Hop Knowledge Risk Agent**
+
+| Reviewer Role | Candidate | Graph Score | Historical Affinity |
+| :--- | :--- | :--- | :--- |
+| **Primary Reviewer** | **@${primary.login}** | \`${primary.score.toFixed(2)}\` | ${primary.shared_files} files touched, ${primary.recent_reviews} recent reviews |
+| **Cross-Training** | **@${secondary.login}** | \`${secondary.score.toFixed(2)}\` | Secondary pairing to distribute codebase knowledge |
+
+#### 📊 Risk & Impact Telemetry
+- **Blast Radius Tier:** \`${metrics.blast_tier}\` (${peakC.toFixed(3)} peak betweenness centrality)
+- **Monopolized Files:** ${bfFiles.length > 0 ? bfFiles.map(b => '\`' + b.path + '\` (@' + b.sole_reviewer + ')').join(', ') : 'None detected (No single point of failure)'}
+- **Knowledge Rationale:** ${rationale}
+
+*Generated autonomously via FalkorDB Knowledge Graph (Track 01: Agents That Act on Connected Data)*`;
+
+  navigator.clipboard.writeText(md).then(() => {
+    notify("📋 GitHub Markdown comment copied to clipboard!", "success");
+  }).catch(() => {
+    notify("Couldn't copy to clipboard", "error");
+  });
+}
+
+function copyCurrentHopCypher() {
+  const el = document.getElementById('explain-cypher-code');
+  if (el) {
+    navigator.clipboard.writeText(el.innerText).then(() => {
+      notify("OpenCypher query copied!", "success");
+    });
+  }
+}
+
 function renderResult(data) {
   const pr = data.pr_details || {};
   const metrics = data.pr_metrics || {};
-  const reviewers = data.decision?.reviewers || [];
+  let reviewers = data.decision?.reviewers || [];
   const riskFlags = data.decision?.risk_flags || [];
   const changedFiles = pr.files || [];
+
+  // Populate What-If Select
+  const whatIfSelect = document.getElementById('what-if-select');
+  if (whatIfSelect && !simulatedExcludedReviewer) {
+    whatIfSelect.innerHTML = `<option value="">(None — Normal Routing)</option>` +
+      reviewers.map(r => `<option value="${r.login}">@${r.login} (Simulate Leave)</option>`).join('');
+  }
+
+  // Filter if simulation active
+  if (simulatedExcludedReviewer) {
+    reviewers = reviewers.filter(r => r.login !== simulatedExcludedReviewer);
+    const statusEl = document.getElementById('what-if-status');
+    if (statusEl) {
+      statusEl.innerHTML = `<span class="text-amber-400 font-bold">⚠️ Rerouted: @${simulatedExcludedReviewer} on leave.</span>`;
+    }
+  } else {
+    const statusEl = document.getElementById('what-if-status');
+    if (statusEl) {
+      statusEl.innerHTML = `<span class="text-emerald-400">✓ All reviewers available</span>`;
+    }
+  }
 
   document.getElementById('pr-badge-num').innerText = `PR #${data.pr_number}`;
   document.getElementById('pr-badge-state').innerText = pr.state ? pr.state.toUpperCase() : 'MERGED';
@@ -635,5 +831,150 @@ async function fetchInsights() {
     notify("Repository insights unavailable.", "error");
   }
 }
+
+/* === Interactive 1-Minute Guided Demo Tour === */
+let tourCurrentStep = 0;
+const TOUR_STEPS = [
+  {
+    title: "1. Select Any Pull Request (500 Ingested)",
+    desc: "Keystone continuously ingests repository commits, PRs, and review histories into FalkorDB. Select benchmark PR #13997 (JSON Schema & Aliases) or search among 500 PRs using Ctrl+K.",
+    tab: "routing",
+    action: () => {
+      document.getElementById('workspace')?.scrollIntoView({ behavior: 'smooth' });
+      selectPr(13997);
+    }
+  },
+  {
+    title: "2. Reviewer Pairing & Knowledge Bottlenecks",
+    desc: "Notice how Keystone recommends @davidhewitt as Primary domain expert (highest composite score) paired with a Secondary Reviewer for cross-training. This prevents knowledge monopolies and maintains review velocity.",
+    tab: "routing",
+    action: () => {
+      switchTab('routing');
+    }
+  },
+  {
+    title: "3. Multi-Hop Reasoning & Explainability",
+    desc: "Zero LLM hallucinations. Keystone traverses PR -> Files -> Co-Change Bridges -> Historical Reviewers. Inspect the exact graph walk and mathematical formula breakdown (30% overlap, 30% structural, 20% activity, 20% recency).",
+    tab: "explain",
+    action: () => {
+      switchTab('explain');
+    }
+  },
+  {
+    title: "4. Interactive Force-Directed Subgraph",
+    desc: "Explore the live force-directed graph. Purple represents the PR, cyan shows touched files, green highlights candidate reviewers, and violet indicates co-change bridges. Click any node to inspect FalkorDB properties.",
+    tab: "graph",
+    action: () => {
+      switchTab('graph');
+    }
+  },
+  {
+    title: "5. Safe Human Approval & Audit Ledger",
+    desc: "Keystone adheres to safe action dispatch. Maintainers review proposed actions before execution, safely logged to the shadow tracking ledger to prevent upstream spam.",
+    tab: "health",
+    action: () => {
+      switchTab('health');
+    }
+  }
+];
+
+function startInteractiveDemoTour() {
+  tourCurrentStep = 0;
+  openTourModal();
+  renderTourStep();
+}
+
+function openTourModal() {
+  let modal = document.getElementById('tour-guide-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'tour-guide-modal';
+    modal.className = 'fixed bottom-6 right-6 z-50 glass-strong p-6 rounded-2xl border border-indigo-500/40 shadow-2xl max-w-md space-y-4';
+    document.body.appendChild(modal);
+  }
+  modal.classList.remove('hidden');
+}
+
+function closeTourModal() {
+  const modal = document.getElementById('tour-guide-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function renderTourStep() {
+  const modal = document.getElementById('tour-guide-modal');
+  if (!modal) return;
+  const step = TOUR_STEPS[tourCurrentStep];
+  step.action();
+
+  modal.innerHTML = `
+    <div class="flex items-center justify-between pb-2 border-b border-indigo-500/20">
+      <div class="flex items-center gap-2">
+        <span class="badge badge-brand text-[10px]">Step ${tourCurrentStep + 1} of ${TOUR_STEPS.length}</span>
+        <span class="text-xs font-bold text-white tracking-tight">Interactive Guide</span>
+      </div>
+      <button onclick="closeTourModal()" class="text-slate-400 hover:text-white text-sm cursor-pointer">✕</button>
+    </div>
+    <div class="space-y-1.5">
+      <h4 class="text-sm font-bold text-indigo-300">${step.title}</h4>
+      <p class="text-xs text-slate-300 leading-relaxed">${step.desc}</p>
+    </div>
+    <div class="flex items-center justify-between pt-2">
+      <button onclick="prevTourStep()" class="btn-secondary text-xs px-3 py-1 cursor-pointer" ${tourCurrentStep === 0 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>
+        ← Prev
+      </button>
+      <div class="flex gap-1">
+        ${TOUR_STEPS.map((_, i) => `<span class="w-2 h-2 rounded-full ${i === tourCurrentStep ? 'bg-indigo-400' : 'bg-slate-700'}"></span>`).join('')}
+      </div>
+      <button onclick="nextTourStep()" class="btn-primary text-xs px-4 py-1 cursor-pointer">
+        ${tourCurrentStep === TOUR_STEPS.length - 1 ? 'Finish 🏁' : 'Next →'}
+      </button>
+    </div>
+  `;
+}
+
+function nextTourStep() {
+  if (tourCurrentStep < TOUR_STEPS.length - 1) {
+    tourCurrentStep++;
+    renderTourStep();
+  } else {
+    closeTourModal();
+    notify("Tour complete! You're ready to explore Keystone.", "success");
+  }
+}
+
+function prevTourStep() {
+  if (tourCurrentStep > 0) {
+    tourCurrentStep--;
+    renderTourStep();
+  }
+}
+
+/* === Global Keyboard Shortcuts === */
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
+
+  // Ctrl + K or / to open PR Triage Browser
+  if ((e.ctrlKey && e.key === 'k') || (!isInput && e.key === '/')) {
+    e.preventDefault();
+    openPrTriageModal();
+    return;
+  }
+
+  // Escape closes modals
+  if (e.key === 'Escape') {
+    closePrTriageModal();
+    closeTourModal();
+    return;
+  }
+
+  // 1-4 switches tabs when not typing
+  if (!isInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    if (e.key === '1') switchTab('routing');
+    else if (e.key === '2') switchTab('explain');
+    else if (e.key === '3') switchTab('graph');
+    else if (e.key === '4') switchTab('health');
+  }
+});
 
 window.onload = init;

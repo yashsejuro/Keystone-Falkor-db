@@ -22,7 +22,7 @@ from backend.agent import run_keystone, plan
 from backend.tools import (
     get_pr, explain_path, bus_factor_files, critical_files,
     default_cutoff, reviewer_candidates, graph_stats, sample_pr,
-    list_recent_prs, pr_criticality
+    list_recent_prs, pr_criticality, get_repo_pr_stats
 )
 from backend.scoring import score_reviewers
 from backend.mcp_server import mcp as keystone_mcp
@@ -137,11 +137,22 @@ async def api_status(repo: str = DEFAULT_REPO):
 
 
 @app.get("/api/prs")
-async def api_prs(repo: str = DEFAULT_REPO, limit: int = 30):
+async def api_prs(repo: str = DEFAULT_REPO, limit: int = 500, q: str | None = None, filter_by: str = "all"):
     try:
         repo = validate_repo(repo)
-        prs = list_recent_prs(limit=limit, repo=repo)
-        return JSONResponse({"repo": repo, "prs": prs, "count": len(prs)})
+        prs = list_recent_prs(limit=limit, repo=repo, q=q, filter_by=filter_by)
+        stats = get_repo_pr_stats(repo)
+        return JSONResponse({"repo": repo, "prs": prs, "count": len(prs), "stats": stats})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/prs/stats")
+async def api_prs_stats(repo: str = DEFAULT_REPO):
+    try:
+        repo = validate_repo(repo)
+        stats = get_repo_pr_stats(repo)
+        return JSONResponse({"repo": repo, "stats": stats})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
