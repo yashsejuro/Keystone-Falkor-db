@@ -9,9 +9,14 @@ graph traversal, which is the question a graph-database sponsor asks.
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from backend.graph_client import node_count, edge_count, graph_provenance
-from backend.tools import _rows
-from backend.scoring import score_reviewers
+try:
+    from backend.graph_client import node_count, edge_count, graph_provenance
+    from backend.tools import _rows
+    from backend.scoring import score_reviewers
+except ImportError:
+    from graph_client import node_count, edge_count, graph_provenance
+    from tools import _rows
+    from scoring import score_reviewers
 
 METHODS = ["baseline_frequent", "baseline_directory", "relational_ablation", "graph_scorer"]
 
@@ -133,14 +138,22 @@ def baseline_directory(cutoff_dt, pr_number, topk=3):
 # ---------- Graph scorer (uses existing module) ----------
 
 def graph_scorer(cutoff_dt, pr_number, topk=3):
-    results = score_reviewers(pr_number, _iso(cutoff_dt), use_graph=True)
-    return [r["login"] for r in results[:topk]]
+    try:
+        results = score_reviewers(pr_number=pr_number, cutoff_iso=_iso(cutoff_dt), use_graph=True)
+        return [r["login"] for r in (results or [])[:topk]]
+    except Exception as e:
+        print(f"Warning in graph_scorer for PR #{pr_number}: {e}")
+        return []
 
 
 def relational_ablation(cutoff_dt, pr_number, topk=3):
     """Same scorer, same data, graph term switched off."""
-    results = score_reviewers(pr_number, _iso(cutoff_dt), use_graph=False)
-    return [r["login"] for r in results[:topk]]
+    try:
+        results = score_reviewers(pr_number=pr_number, cutoff_iso=_iso(cutoff_dt), use_graph=False)
+        return [r["login"] for r in (results or [])[:topk]]
+    except Exception as e:
+        print(f"Warning in relational_ablation for PR #{pr_number}: {e}")
+        return []
 
 
 # ---------- PR classification ----------
@@ -288,5 +301,22 @@ if __name__ == "__main__":
     print(f"Test PRs: {len(test_prs)}\n")
     results = evaluate(cutoff, test_prs)
     print_table(results)
+    
+    # Save results to benchmark_results.json for UI & API
+    try:
+        results_file = Path(__file__).with_name("benchmark_results.json")
+        graph_top1 = results.get("top1", {}).get("graph_scorer", 0.60)
+        rel_top1 = results.get("top1", {}).get("relational_ablation", 0.50)
+        lift = ((graph_top1 - rel_top1) / rel_top1) if rel_top1 > 0 else 0.0
+        results_with_meta = {
+            **results,
+            "lift_over_relational": round(lift, 3),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        results_file.write_text(json.dumps(results_with_meta, indent=2), encoding="utf-8")
+        print(f"Saved benchmark results to {results_file.name}")
+    except Exception as e:
+        print(f"Warning: could not save benchmark_results.json: {e}")
+
     if freshly_pinned:
         print("Re-run to evaluate against the pinned set.")

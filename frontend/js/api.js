@@ -82,5 +82,11 @@ const KeystoneAPI = {
   async clearLedger() {
     const res = await fetch('/api/action/clear', { method: 'POST' });
     return res.json();
+  },
+
+  async getBenchmark() {
+    const res = await fetch('/api/benchmark');
+    if (!res.ok) throw new Error('Failed to fetch benchmark');
+    return res.json();
   }
 };

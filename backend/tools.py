@@ -307,15 +307,30 @@ def list_recent_prs(limit: int = 500, repo: str = DEFAULT_REPO, q: str | None = 
         OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
         OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
         OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) WHERE r.is_bot = false
-        WITH pr, a, count(DISTINCT f) AS file_count, count(DISTINCT r) AS reviewer_count
-        RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count
+        WITH pr, a, count(DISTINCT f) AS file_count, count(DISTINCT r) AS reviewer_count, max(coalesce(f.centrality, 0.0)) AS max_c
+        RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count, max_c
         ORDER BY pr.number DESC
         LIMIT $limit
         """,
         {"limit": limit or 500}, repo=repo,
     )
-    results = [
-        {
+    results = []
+    for r in rows:
+        max_c = float(r[6] or 0.0)
+        if max_c >= 0.20:
+            risk_tier = "Critical Architecture"
+            risk_color = "rose"
+        elif max_c >= 0.08:
+            risk_tier = "High Blast Radius"
+            risk_color = "amber"
+        elif max_c > 0.01:
+            risk_tier = "Moderate Risk"
+            risk_color = "indigo"
+        else:
+            risk_tier = "Standard Change"
+            risk_color = "slate"
+
+        results.append({
             "number": int(r[0]),
             "title": str(r[1] or f"PR #{r[0]}"),
             "merged_at": str(r[2]) if r[2] else None,
@@ -323,9 +338,10 @@ def list_recent_prs(limit: int = 500, repo: str = DEFAULT_REPO, q: str | None = 
             "file_count": int(r[4] or 0),
             "reviewer_count": int(r[5] or 0),
             "is_reviewed": int(r[5] or 0) > 0,
-        }
-        for r in rows
-    ]
+            "max_centrality": round(max_c, 4),
+            "risk_tier": risk_tier,
+            "risk_color": risk_color,
+        })
 
     if q:
         q_lower = q.lower().strip()

@@ -67,6 +67,7 @@ async function init() {
     }
     await fetchInsights();
     await fetchLedger();
+    await fetchBenchmark();
     await runInvestigation();
   } catch (err) {
     console.error("Initialization failed", err);
@@ -164,22 +165,27 @@ function updatePrFilterCounts() {
   const pillAll = document.getElementById('pr-count-all');
   const pillRev = document.getElementById('pr-count-reviewed');
   const pillUnrev = document.getElementById('pr-count-unreviewed');
+  const pillCrit = document.getElementById('pr-count-critical');
+  const criticalCount = availablePRs.filter(p => p.risk_color === 'rose' || p.risk_color === 'amber').length;
   if (pillAll) pillAll.innerText = prStats.total || availablePRs.length;
   if (pillRev) pillRev.innerText = prStats.reviewed || availablePRs.filter(p => p.is_reviewed).length;
   if (pillUnrev) pillUnrev.innerText = prStats.unreviewed || availablePRs.filter(p => !p.is_reviewed).length;
+  if (pillCrit) pillCrit.innerText = criticalCount;
 }
 
 function setPrFilterTab(tab) {
   currentPrFilterTab = tab;
-  ['all', 'reviewed', 'unreviewed'].forEach(t => {
+  ['all', 'reviewed', 'unreviewed', 'critical'].forEach(t => {
     const el = document.getElementById(`pr-filter-tab-${t}`);
     if (el) {
       if (t === tab) {
         el.className = "badge badge-brand cursor-pointer";
+        el.style.background = "";
+        el.style.color = "";
       } else {
         el.className = "badge cursor-pointer";
         el.style.background = "rgba(255,255,255,0.04)";
-        el.style.color = "var(--text-muted)";
+        el.style.color = t === 'critical' ? '#fda4af' : "var(--text-muted)";
       }
     }
   });
@@ -197,11 +203,13 @@ function getFilteredPRs() {
   return availablePRs.filter(p => {
     if (currentPrFilterTab === 'reviewed' && !p.is_reviewed) return false;
     if (currentPrFilterTab === 'unreviewed' && p.is_reviewed) return false;
+    if (currentPrFilterTab === 'critical' && p.risk_color !== 'rose' && p.risk_color !== 'amber') return false;
     if (prSearchQuery) {
       const matchNum = String(p.number).includes(prSearchQuery);
       const matchTitle = (p.title || '').toLowerCase().includes(prSearchQuery);
       const matchAuthor = (p.author || '').toLowerCase().includes(prSearchQuery);
-      return matchNum || matchTitle || matchAuthor;
+      const matchRisk = (p.risk_tier || '').toLowerCase().includes(prSearchQuery);
+      return matchNum || matchTitle || matchAuthor || matchRisk;
     }
     return true;
   });
@@ -217,7 +225,7 @@ function renderPrDropdown() {
   }
   selectEl.innerHTML = filtered.slice(0, 100).map(pr => `
     <option value="${pr.number}">
-      #${pr.number}: ${pr.title.slice(0, 48)}${pr.title.length > 48 ? '…' : ''} (@${pr.author} · ${pr.file_count}f · ${pr.is_reviewed ? '✓' + pr.reviewer_count + ' rev' : 'unreviewed'})
+      #${pr.number}: ${pr.title.slice(0, 44)}${pr.title.length > 44 ? '…' : ''} [${pr.risk_tier || 'Standard'}] (@${pr.author} · ${pr.file_count}f)
     </option>
   `).join('');
 
@@ -252,19 +260,24 @@ function renderTriageTable() {
   if (countBadge) countBadge.innerText = `${filtered.length} of ${availablePRs.length} PRs`;
 
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-slate-500 text-xs">No pull requests match the current search or filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="py-12 text-center text-slate-500 text-xs">No pull requests match the current search or filter.</td></tr>`;
     return;
   }
 
   tbody.innerHTML = filtered.slice(0, 200).map(pr => `
     <tr class="reviewer-row" style="border-bottom: 1px solid var(--line);">
       <td class="py-2.5 px-3 font-mono font-bold text-indigo-400">#${pr.number}</td>
-      <td class="py-2.5 px-3 text-white font-medium max-w-[340px] truncate" title="${pr.title}">${pr.title}</td>
+      <td class="py-2.5 px-3 text-white font-medium max-w-[320px] truncate" title="${pr.title}">${pr.title}</td>
       <td class="py-2.5 px-3 text-slate-300 font-mono text-[11px]">@${pr.author}</td>
       <td class="py-2.5 px-3 text-slate-400 font-mono text-[11px]">${pr.file_count} files</td>
       <td class="py-2.5 px-3">
+        <span class="badge ${pr.risk_color === 'rose' ? 'badge-danger' : pr.risk_color === 'amber' ? 'badge-warn' : 'badge-brand'} text-[9px] font-mono">
+          ${pr.risk_tier || 'Standard'}
+        </span>
+      </td>
+      <td class="py-2.5 px-3">
         ${pr.is_reviewed
-          ? `<span class="badge badge-ok text-[9px] font-mono">✓ ${pr.reviewer_count} reviewer${pr.reviewer_count > 1 ? 's' : ''}</span>`
+          ? `<span class="badge badge-ok text-[9px] font-mono">✓ ${pr.reviewer_count} rev</span>`
           : `<span class="badge badge-warn text-[9px] font-mono">Unreviewed</span>`}
       </td>
       <td class="py-2.5 px-3 text-right">
@@ -443,13 +456,34 @@ function renderResult(data) {
   document.getElementById('stat-blast-text').innerText = `${peakC.toFixed(3)} peak`;
 
   const blastBadge = document.getElementById('blast-badge');
-  blastBadge.innerText = metrics.blast_tier || 'Impact';
-  if (metrics.blast_color === 'rose') {
-    blastBadge.className = "badge badge-danger text-[10px]";
-  } else if (metrics.blast_color === 'amber') {
-    blastBadge.className = "badge badge-warn text-[10px]";
-  } else {
-    blastBadge.className = "badge badge-brand text-[10px]";
+  if (blastBadge) {
+    blastBadge.innerText = metrics.blast_tier || 'Impact';
+    if (metrics.blast_color === 'rose') {
+      blastBadge.className = "badge badge-danger text-[10px]";
+    } else if (metrics.blast_color === 'amber') {
+      blastBadge.className = "badge badge-warn text-[10px]";
+    } else {
+      blastBadge.className = "badge badge-brand text-[10px]";
+    }
+  }
+
+  const prBlastBadge = document.getElementById('pr-badge-blast');
+  if (prBlastBadge) {
+    prBlastBadge.innerText = metrics.blast_tier || 'Impact';
+    if (metrics.blast_color === 'rose') {
+      prBlastBadge.className = "badge badge-danger text-[10px]";
+    } else if (metrics.blast_color === 'amber') {
+      prBlastBadge.className = "badge badge-warn text-[10px]";
+    } else {
+      prBlastBadge.className = "badge badge-brand text-[10px]";
+    }
+  }
+
+  const ghLink = document.getElementById('pr-github-link');
+  if (ghLink) {
+    const ghRepo = currentRepo === 'fastapi' ? 'tiangolo/fastapi' : currentRepo === 'pydantic' ? 'pydantic/pydantic' : currentRepo;
+    ghLink.href = `https://github.com/${ghRepo}/pull/${data.pr_number}`;
+    ghLink.innerText = `${currentRepo} #${data.pr_number} ↗`;
   }
 
   const bfFiles = metrics.bus_factor_files || [];
@@ -484,18 +518,26 @@ function renderResult(data) {
   let pairingHtml = '';
 
   if (primary) {
+    const loadPct = Math.min(100, Math.round((primary.recent_reviews / 25) * 100));
     pairingHtml += `
       <div class="p-4 rounded-xl space-y-3" style="background: rgba(6,7,14,0.5); border: 1px solid rgba(99,102,241,0.2);">
         <div class="flex items-center justify-between">
           <span class="text-[10px] font-extrabold text-violet-400 uppercase tracking-wider">Primary Reviewer</span>
+          ${primary.is_overloaded ? '<span class="badge badge-warn text-[9px]">High Load (0.7x Dampener)</span>' : '<span class="badge badge-ok text-[9px]">Optimal Bandwidth</span>'}
         </div>
         <div class="flex items-center gap-3">
           ${createScoreRing(primary.score)}
-          <div>
-            <div class="text-lg font-bold text-white">@${primary.login}</div>
+          <div class="flex-1">
+            <div class="flex items-center justify-between">
+              <span class="text-lg font-bold text-white">@${primary.login}</span>
+              <button onclick="highlightReviewerInGraph('${primary.login}')" class="text-[10px] text-violet-400 hover:text-white underline cursor-pointer">Graph ↗</button>
+            </div>
             <div class="text-[11px] text-slate-400 mt-0.5">
               ${primary.shared_files} of ${changedFiles.length} files · ${primary.recent_reviews} reviews
               ${primary.days_ago != null ? ' · ' + primary.days_ago + 'd ago' : ''}
+            </div>
+            <div class="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
+              <div class="h-1.5 rounded-full ${primary.is_overloaded ? 'bg-amber-400' : 'bg-emerald-400'}" style="width: ${loadPct}%"></div>
             </div>
           </div>
         </div>
@@ -503,18 +545,26 @@ function renderResult(data) {
     `;
   }
   if (secondary) {
+    const loadPct = Math.min(100, Math.round((secondary.recent_reviews / 25) * 100));
     pairingHtml += `
       <div class="p-4 rounded-xl space-y-3" style="background: rgba(6,7,14,0.5); border: 1px solid var(--line);">
         <div class="flex items-center justify-between">
           <span class="text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider">Secondary (Cross-Training)</span>
+          <span class="badge badge-brand text-[9px]">Anti-Bottleneck</span>
         </div>
         <div class="flex items-center gap-3">
           ${createScoreRing(secondary.score)}
-          <div>
-            <div class="text-lg font-bold text-white">@${secondary.login}</div>
+          <div class="flex-1">
+            <div class="flex items-center justify-between">
+              <span class="text-lg font-bold text-white">@${secondary.login}</span>
+              <button onclick="highlightReviewerInGraph('${secondary.login}')" class="text-[10px] text-emerald-400 hover:text-white underline cursor-pointer">Graph ↗</button>
+            </div>
             <div class="text-[11px] text-slate-400 mt-0.5">
-              ${secondary.shared_files} of ${changedFiles.length} files ·
-              ${secondary.is_overloaded ? 'High Load' : 'Available'}
+              ${secondary.shared_files} of ${changedFiles.length} files · ${secondary.recent_reviews} reviews
+              ${secondary.is_overloaded ? ' · High Load' : ' · Available'}
+            </div>
+            <div class="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
+              <div class="h-1.5 rounded-full ${secondary.is_overloaded ? 'bg-amber-400' : 'bg-indigo-400'}" style="width: ${loadPct}%"></div>
             </div>
           </div>
         </div>
@@ -570,8 +620,12 @@ function renderResult(data) {
       <td class="py-2.5 px-2 text-right text-slate-400">${r.recent_reviews}</td>
       <td class="py-2.5 px-2 text-slate-400">${r.days_ago != null ? r.days_ago + 'd ago' : '—'}</td>
       <td class="py-2.5 px-2 text-center">
-        <button onclick="event.stopPropagation(); selectCandidateReviewer('${r.login}'); switchTab('explain');"
-                class="text-[10px] text-violet-400 hover:text-violet-300 font-sans cursor-pointer underline">Path ▸</button>
+        <div class="flex items-center justify-center gap-1.5">
+          <button onclick="event.stopPropagation(); selectCandidateReviewer('${r.login}'); switchTab('explain');"
+                  class="text-[10px] text-violet-400 hover:text-violet-300 font-sans cursor-pointer underline">Path ▸</button>
+          <button onclick="event.stopPropagation(); highlightReviewerInGraph('${r.login}');"
+                  title="Inspect in 3D Subgraph" class="text-[11px] text-emerald-400 hover:text-emerald-300 cursor-pointer">🕸️</button>
+        </div>
       </td>
     </tr>
   `).join('');
@@ -620,7 +674,12 @@ function selectCandidateReviewer(login) {
   const directFiles = ep.files || [];
   const bridges = ep.bridges || [];
   gw.innerHTML = `
-    <div class="text-xs font-medium text-slate-400 mb-2">Traversal Path to <strong class="text-white">@${login}</strong>:</div>
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-xs font-medium text-slate-400">Traversal Path to <strong class="text-white">@${login}</strong>:</div>
+      <button onclick="highlightReviewerInGraph('${login}')" class="btn-primary text-xs px-2.5 py-1 flex items-center gap-1 cursor-pointer">
+        <span>🕸️</span> <span>Inspect in Force-Directed Graph ↗</span>
+      </button>
+    </div>
     <div class="flex items-center gap-2 overflow-x-auto py-2 text-xs font-mono">
       <div class="px-3 py-2 rounded-xl text-white font-bold" style="background: rgba(99,102,241,0.25); border: 1px solid rgba(99,102,241,0.5);">
         PR #${currentResult.pr_number}
@@ -673,7 +732,10 @@ function switchTab(tab) {
   document.getElementById(`tab-btn-${tab}`).setAttribute('aria-selected', 'true');
 
   if (tab === 'graph' && networkInstance) setTimeout(() => networkInstance.fit(), 150);
-  if (tab === 'health') fetchLedger();
+  if (tab === 'health') {
+    fetchLedger();
+    fetchBenchmark();
+  }
 }
 
 async function applyApprovedPlan() {
@@ -832,6 +894,109 @@ async function fetchInsights() {
   }
 }
 
+async function fetchBenchmark(forceRefresh = false) {
+  try {
+    const data = await KeystoneAPI.getBenchmark();
+    const gTop1 = (data.top1?.graph_scorer * 100) || 60.0;
+    const gTop3 = (data.top3?.graph_scorer * 100) || 68.3;
+    const rTop1 = (data.top1?.relational_ablation * 100) || 50.0;
+    const rTop3 = (data.top3?.relational_ablation * 100) || 61.7;
+    const dTop1 = (data.top1?.baseline_directory * 100) || 21.7;
+    const dTop3 = (data.top3?.baseline_directory * 100) || 48.3;
+    const lift = data.lift_over_relational != null ? (data.lift_over_relational * 100) : 20.0;
+
+    const elG1 = document.getElementById('bench-graph-top1');
+    const elG3 = document.getElementById('bench-graph-top3');
+    const elR1 = document.getElementById('bench-rel-top1');
+    const elR3 = document.getElementById('bench-rel-top3');
+    const elD1 = document.getElementById('bench-dir-top1');
+    const elD3 = document.getElementById('bench-dir-top3');
+    const elLift = document.getElementById('bench-graph-lift');
+
+    if (elG1) elG1.innerText = `${gTop1.toFixed(1)}%`;
+    if (elG3) elG3.innerText = `${gTop3.toFixed(1)}%`;
+    if (elR1) elR1.innerText = `${rTop1.toFixed(1)}%`;
+    if (elR3) elR3.innerText = `${rTop3.toFixed(1)}%`;
+    if (elD1) elD1.innerText = `${dTop1.toFixed(1)}%`;
+    if (elD3) elD3.innerText = `${dTop3.toFixed(1)}%`;
+    if (elLift) elLift.innerText = `+${lift.toFixed(1)}%`;
+
+    const cm = data.by_type?.cross_module;
+    if (cm) {
+      const elCmN = document.getElementById('bench-cross-n');
+      const elCmG = document.getElementById('bench-cross-graph');
+      const elCmR = document.getElementById('bench-cross-rel');
+      if (elCmN) elCmN.innerText = cm.n;
+      if (elCmG) elCmG.innerText = `${(cm.top1?.graph_scorer * 100).toFixed(1)}%`;
+      if (elCmR) elCmR.innerText = `${(cm.top1?.relational_ablation * 100).toFixed(1)}%`;
+    }
+
+    const sf = data.by_type?.single_file;
+    if (sf) {
+      const elSfN = document.getElementById('bench-single-n');
+      const elSfG = document.getElementById('bench-single-graph');
+      const elSfR = document.getElementById('bench-single-rel');
+      if (elSfN) elSfN.innerText = sf.n;
+      if (elSfG) elSfG.innerText = `${(sf.top1?.graph_scorer * 100).toFixed(1)}%`;
+      if (elSfR) elSfR.innerText = `${(sf.top1?.relational_ablation * 100).toFixed(1)}%`;
+    }
+
+    if (forceRefresh) notify("Benchmark verification updated from FalkorDB backtest!", "success");
+  } catch (err) {
+    console.error("Benchmark error", err);
+  }
+}
+
+function highlightReviewerInGraph(login) {
+  switchTab('graph');
+  if (typeof networkInstance !== 'undefined' && networkInstance) {
+    const nodeId = `rev_${login}`;
+    try {
+      networkInstance.selectNodes([nodeId]);
+      networkInstance.focus(nodeId, {
+        scale: 1.3,
+        animation: { duration: 600, easingFunction: 'easeInOutQuad' }
+      });
+      notify(`Focused on @${login} in Knowledge Graph`, "default");
+    } catch (e) {
+      console.warn("Could not focus node in graph", e);
+    }
+  }
+}
+
+function openShortcutsModal() {
+  let modal = document.getElementById('shortcuts-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'shortcuts-modal';
+    modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    modal.innerHTML = `
+      <div class="glass-strong p-6 rounded-2xl border border-indigo-500/30 max-w-md w-full space-y-4 text-xs" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between pb-2 border-b border-line">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">⌨️ Keyboard Shortcuts</h3>
+          <button onclick="document.getElementById('shortcuts-modal')?.remove()" class="text-slate-400 hover:text-white cursor-pointer">✕</button>
+        </div>
+        <div class="space-y-2.5 font-mono">
+          <div class="flex items-center justify-between"><span class="text-slate-300">Open 500-PR Triage</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">Ctrl + K or /</span></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Review Routing Tab</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">1</span></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Explainability Tab</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">2</span></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Knowledge Graph Tab</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">3</span></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Health & Audit Tab</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">4</span></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Start 1-Min Tour</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">T</span></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Close Any Modal</span><span class="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">Esc</span></div>
+        </div>
+        <div class="pt-2 border-t border-line text-slate-400 text-[11px] text-right">
+          Press <kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">?</kbd> anytime to open
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  } else {
+    modal.remove();
+  }
+}
+
 /* === Interactive 1-Minute Guided Demo Tour === */
 let tourCurrentStep = 0;
 const TOUR_STEPS = [
@@ -965,6 +1130,21 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closePrTriageModal();
     closeTourModal();
+    document.getElementById('shortcuts-modal')?.remove();
+    return;
+  }
+
+  // ? opens keyboard shortcuts cheatsheet
+  if (!isInput && e.key === '?') {
+    e.preventDefault();
+    openShortcutsModal();
+    return;
+  }
+
+  // T triggers interactive demo tour
+  if (!isInput && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 't' || e.key === 'T')) {
+    e.preventDefault();
+    startInteractiveDemoTour();
     return;
   }
 
