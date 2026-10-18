@@ -1,4 +1,4 @@
-## Judge Quick Start (10 seconds)
+## Quick Start (10 seconds)
 
 Elevator pitch (10s)
 Keystone automatically routes pull requests to the best reviewers by querying a live FalkorDB graph (PR → File → REVIEWED → Reviewer) and producing a transparent score, an explainable graph path, and safe, auditable actions (DRY_RUN / SHADOW / LIVE).
