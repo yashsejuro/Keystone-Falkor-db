@@ -146,9 +146,15 @@ def validate_repo(repo: str) -> str:
         raise ValueError("Repository identifier must be a non-empty string.")
     
     clean = repo.strip()
+    lower = clean.lower()
+
+    # Prefer canonical short key if slug matches a pre-registered slug (e.g. 'pydantic/pydantic' -> 'pydantic')
+    for short_key in ("pydantic", "fastapi", "redis"):
+        if lower == REPO_SLUGS.get(short_key, "").lower():
+            return short_key
+
     if clean in REPOS:
         return clean
-    lower = clean.lower()
     if lower in REPOS:
         return lower
 

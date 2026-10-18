@@ -625,7 +625,7 @@ def estimate_ingestion_scope(repo_slug: str, scope_type: str = "recent",
     est_elements = est_prs * 24
 
     limitation_text = (
-        "GitHub API limits authenticated users to 5,000 requests/hour and unauthenticated users to 60/hour. "
+        "GitHub rate limits: GitHub API limits authenticated users to 5,000 requests/hour and unauthenticated users to 60/hour. "
         "Rate limits may affect completion time for large scopes."
     )
 

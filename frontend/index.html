@@ -444,22 +444,25 @@
         <button id="tab-btn-all" role="tab" aria-selected="false" onclick="setExplorerTab('all')" class="subtab-btn">
           <span>📚</span> All Ingested PRs
         </button>
+        <span id="tab-btn-all-prs" style="display:none;"></span>
         <button id="tab-btn-gaps" role="tab" aria-selected="false" onclick="setExplorerTab('gaps')" class="subtab-btn">
           <span>🧩</span> Ingestion Gaps & Coverage
         </button>
       </div>
 
       <!-- Expandable "Why am I seeing these PRs?" Section -->
-      <details class="why-prs-card" id="why-prs-details" open>
+      <details class="why-prs-card" id="why-prs-card" open>
         <summary>
           <span>ℹ️ Why am I seeing these PRs? (Truthful Scope & Exclusions Breakdown)</span>
         </summary>
         <div class="why-prs-content" id="why-prs-content">
-          <div>• Repository: <strong id="why-repo-name">pydantic/pydantic</strong></div>
-          <div>• Active Ingestion Scope: <span id="why-active-scope">Showing ingested PRs</span></div>
-          <div>• Analysis Window: <span id="why-analysis-window">Last 90 days</span></div>
-          <div id="why-exclusions-text" style="color: #991B1B; font-weight: 500;">
-            • Note: Older PRs outside the ingestion scope have not been loaded into the graph yet.
+          <div id="why-prs-explanation">
+            <div>• Repository: <strong id="why-repo-name">pydantic/pydantic</strong></div>
+            <div>• Active Ingestion Scope: <span id="why-active-scope">Showing ingested PRs</span></div>
+            <div>• Analysis Window: <span id="why-analysis-window">Last 90 days</span></div>
+            <div id="why-exclusions-text" style="color: #991B1B; font-weight: 500;">
+              • Note: Older PRs outside the ingestion scope have not been loaded into the graph yet.
+            </div>
           </div>
         </div>
       </details>
@@ -759,6 +762,7 @@
               <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px;">
                 <label class="scope-option-card selected" id="scope-card-recent">
                   <input type="radio" name="ingest-scope-type" value="recent" checked onchange="onScopeTypeChange('recent')">
+                  <input type="radio" name="ingestion-scope" value="recent" style="display:none;">
                   <strong style="font-size: 12px; color: #0F172A;">Ingest Recent PRs</strong>
                   <span style="font-size: 11px; color: #64748B;">Latest batch of merged PRs</span>
                 </label>
@@ -810,7 +814,7 @@
               </div>
 
               <div style="display: flex; gap: 8px;">
-                <button type="button" onclick="previewIngestionConfirmation()" class="btn btn-secondary" style="height: 38px;">
+                <button type="button" id="btn-preview-scope" onclick="previewIngestionConfirmation()" class="btn btn-secondary" style="height: 38px;">
                   <span>📋 Preview Scope Confirmation</span>
                 </button>
                 <button id="btn-start-ingest" onclick="startRepositoryIngestion()" class="btn btn-primary" style="height: 38px;">
@@ -826,7 +830,8 @@
           </div>
 
           <!-- Scope Confirmation Preview Card -->
-          <div id="scope-confirmation-card" style="display: none; padding: 16px; background: #F8FAFC; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-top: 10px;">
+          <div id="scope-confirmation-card" class="scope-preview-card" style="display: none; padding: 16px; background: #F8FAFC; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-top: 10px;">
+            <span id="scope-preview-card" style="display:none;"></span>
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
               <h4 style="font-size: 13px; font-weight: 700; color: #0F172A;">Ingestion Scope Confirmation Summary</h4>
               <button onclick="document.getElementById('scope-confirmation-card').style.display='none'" class="btn btn-secondary btn-sm">✕ Close</button>
