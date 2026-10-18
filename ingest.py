@@ -8,9 +8,23 @@ load_dotenv()
 
 import sys
 
+try:
+    from backend.graph_client import make_graph_name, register_repo, REPOS
+except ImportError:
+    from graph_client import make_graph_name, register_repo, REPOS
+
 REPO = sys.argv[1] if len(sys.argv) > 1 else "pydantic/pydantic"
+# LIMIT represents the target batch size for this ingestion job, not the repository's total PR count.
 LIMIT = int(sys.argv[2]) if len(sys.argv) > 2 else 500
-GRAPH_NAME = "keystone_" + REPO.split("/")[1]
+
+# Canonical collision-safe graph name lookup / registration
+if "/" in REPO:
+    parts = REPO.strip().split("/")
+    GRAPH_NAME = register_repo(REPO.strip())
+    # Retrieve the graph name assigned by registry
+    GRAPH_NAME = REPOS.get(GRAPH_NAME, make_graph_name(parts[0], parts[1]))
+else:
+    GRAPH_NAME = REPOS.get(REPO.lower(), f"keystone_{REPO}")
 
 H = {
     "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
@@ -28,14 +42,22 @@ retry = Retry(
 session.mount("https://", HTTPAdapter(max_retries=retry))
 session.headers.update(H)
 
-db = FalkorDB(
-    host=os.getenv("FALKOR_HOST"),
-    port=int(os.getenv("FALKOR_PORT")),
-    username=os.getenv("FALKOR_USER"),
-    password=os.getenv("FALKOR_PASS"),
-    socket_timeout=60,
-)
-g = db.select_graph(GRAPH_NAME)
+db = None
+g = None
+
+
+def get_graph():
+    global db, g
+    if g is None:
+        db = FalkorDB(
+            host=os.getenv("FALKOR_HOST"),
+            port=int(os.getenv("FALKOR_PORT", "6379")),
+            username=os.getenv("FALKOR_USER"),
+            password=os.getenv("FALKOR_PASS"),
+            socket_timeout=60,
+        )
+        g = db.select_graph(GRAPH_NAME)
+    return g
 
 
 def gh(url, params=None):
@@ -63,7 +85,7 @@ def gh(url, params=None):
 
 
 def already_ingested(number):
-    r = g.query("MATCH (pr:PullRequest {number: $n}) RETURN 1", {"n": number})
+    r = get_graph().query("MATCH (pr:PullRequest {number: $n}) RETURN 1", {"n": number})
     return len(r.result_set) > 0
 
 
@@ -76,16 +98,18 @@ def ingest_pr(pr):
     reviews = gh(f"https://api.github.com/repos/{REPO}/pulls/{number}/reviews", {"per_page": 100}) or []
     time.sleep(0.3)
 
+    graph = get_graph()
+
     author = pr.get("user", {}).get("login")
     if author:
-        g.query(
+        graph.query(
             "MERGE (p:Person {login: $l}) "
             "ON CREATE SET p.first_seen = $at, p.is_bot = $bot "
             "ON MATCH SET p.last_seen = $at",
             {"l": author, "at": pr["created_at"], "bot": author.endswith("[bot]")},
         )
 
-    g.query(
+    graph.query(
         "MERGE (pr:PullRequest {number: $n}) "
         "SET pr.title = $t, pr.state = $s, pr.created_at = $c, pr.merged_at = $m, "
         "pr.additions = $a, pr.deletions = $d, pr.files_changed = $f",
@@ -96,7 +120,7 @@ def ingest_pr(pr):
     )
 
     if author:
-        g.query(
+        graph.query(
             "MATCH (p:Person {login: $l}), (pr:PullRequest {number: $n}) "
             "MERGE (p)-[:AUTHORED {at: $at}]->(pr)",
             {"l": author, "n": number, "at": pr["created_at"]},
@@ -106,7 +130,7 @@ def ingest_pr(pr):
         path = f.get("filename")
         if not path:
             continue
-        g.query(
+        graph.query(
             "MERGE (f:File {path: $path}) "
             "WITH f "
             "MATCH (pr:PullRequest {number: $n}) "
@@ -121,7 +145,7 @@ def ingest_pr(pr):
         at = rev.get("submitted_at")
         if not who or not st:
             continue
-        g.query(
+        graph.query(
             "MERGE (p:Person {login: $l}) "
             "ON CREATE SET p.first_seen = $at, p.is_bot = $bot "
             "ON MATCH SET p.last_seen = $at "
@@ -134,7 +158,9 @@ def ingest_pr(pr):
 
 
 def main():
-    print(f"Ingesting {REPO} -> '{GRAPH_NAME}' (target {LIMIT}, resumable)\n")
+    graph = get_graph()
+    print(f"Ingesting {REPO} -> Graph '{GRAPH_NAME}' (Batch size: {LIMIT}; use --limit to change, resumable)\n")
+    print(f"Note: Batch size {LIMIT} indicates the maximum PRs fetched per ingestion job, not total repository size.\n")
 
     for q in [
         "CREATE INDEX FOR (p:Person) ON (p.login)",
@@ -142,11 +168,11 @@ def main():
         "CREATE INDEX FOR (f:File) ON (f.path)",
     ]:
         try:
-            g.query(q)
+            graph.query(q)
         except Exception:
             pass
 
-    start = g.query("MATCH (pr:PullRequest) RETURN count(pr)").result_set[0][0]
+    start = graph.query("MATCH (pr:PullRequest) RETURN count(pr)").result_set[0][0]
     print(f"Already in graph: {start} PRs\n")
 
     page, done = 1, 0
@@ -172,13 +198,13 @@ def main():
                 continue
             done += 1
             if done % 25 == 0:
-                print(f"  +{done} new / {start + done} total / {LIMIT} target")
-        page += 1
+                print(f"  +{done} new / {start + done} total / {LIMIT} batch limit")
+            page += 1
         time.sleep(1)   # gentle between pages
 
     print(f"\nDone. Added {done} new PRs.")
-    print(f"Total nodes: {g.query('MATCH (n) RETURN count(n)').result_set[0][0]}")
-    print(f"Total edges: {g.query('MATCH ()-[e]->() RETURN count(e)').result_set[0][0]}")
+    print(f"Total nodes: {graph.query('MATCH (n) RETURN count(n)').result_set[0][0]}")
+    print(f"Total edges: {graph.query('MATCH ()-[e]->() RETURN count(e)').result_set[0][0]}")
 
 
 if __name__ == "__main__":

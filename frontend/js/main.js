@@ -249,18 +249,24 @@ function renderCoveragePanel(cov) {
   const ghTotalEl = document.getElementById('cov-github-total');
   const ghSubEl = document.getElementById('cov-discovered-sub');
   if (ghTotalEl) {
-    ghTotalEl.innerText = counts.github_total !== null && counts.github_total !== undefined
+    ghTotalEl.innerText = (counts.github_total !== null && counts.github_total !== undefined)
       ? Number(counts.github_total).toLocaleString()
-      : 'Discovered';
+      : 'Unavailable';
   }
   if (ghSubEl) {
-    ghSubEl.innerText = `${Number(counts.discovered || 0).toLocaleString()} discovered`;
+    ghSubEl.innerText = (counts.discovered !== null && counts.discovered !== undefined)
+      ? `${Number(counts.discovered).toLocaleString()} discovered`
+      : 'Unavailable';
   }
 
   // Ingested Count
   const ingEl = document.getElementById('cov-ingested');
   const ingPctEl = document.getElementById('cov-ingested-pct');
-  if (ingEl) ingEl.innerText = Number(counts.ingested || 0).toLocaleString();
+  if (ingEl) {
+    ingEl.innerText = (counts.ingested !== null && counts.ingested !== undefined)
+      ? Number(counts.ingested).toLocaleString()
+      : 'Unavailable';
+  }
   if (ingPctEl) {
     if (pcts.ingested_pct !== null && pcts.ingested_pct !== undefined) {
       ingPctEl.innerText = `${pcts.ingested_pct}% of GitHub universe`;
@@ -272,17 +278,26 @@ function renderCoveragePanel(cov) {
   // Active Analysis Window Count
   const winEl = document.getElementById('cov-analysis-window');
   const winLabelEl = document.getElementById('cov-window-label');
-  if (winEl) winEl.innerText = Number(counts.in_active_window || counts.analysis_ready || 0).toLocaleString();
+  if (winEl) {
+    const winVal = counts.in_active_window ?? counts.analysis_ready;
+    winEl.innerText = (winVal !== null && winVal !== undefined)
+      ? Number(winVal).toLocaleString()
+      : 'Unavailable';
+  }
   if (winLabelEl) winLabelEl.innerText = cov.analysis_window?.label || "Last 90 days";
 
   // Last Synced Timestamp
   const lastSyncEl = document.getElementById('coverage-last-synced');
-  if (lastSyncEl && cov.last_synced_at) {
-    try {
-      const dt = new Date(cov.last_synced_at);
-      lastSyncEl.innerText = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-    } catch (e) {
-      lastSyncEl.innerText = cov.last_synced_at.slice(0, 10);
+  if (lastSyncEl) {
+    if (cov.last_synced_at) {
+      try {
+        const dt = new Date(cov.last_synced_at);
+        lastSyncEl.innerText = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      } catch (e) {
+        lastSyncEl.innerText = cov.last_synced_at.slice(0, 10);
+      }
+    } else {
+      lastSyncEl.innerText = 'Unavailable';
     }
   }
 

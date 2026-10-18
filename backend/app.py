@@ -636,7 +636,7 @@ async def api_mcp_tools():
             "name": "explain_path",
             "description": "Find shortest evidence graph path from PR files to a candidate reviewer.",
             "params": {"pr_number": "int", "reviewer": "str", "repo": "str"},
-            "example": {"pr_number": 13997, "reviewer": "davidhewitt", "repo": "pydantic"}
+            "example": {"pr_number": 13997, "reviewer": "example_reviewer", "repo": "pydantic"}
         },
         {
             "name": "data_provenance",

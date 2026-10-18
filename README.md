@@ -6,6 +6,22 @@ Keystone analyzes codebases as connected data: traversing git histories, co-chan
 
 ---
 
+## Judge Demo (3–5 Minute Flow)
+
+```markdown
+1. Select repo (e.g., pydantic) -> Observe live 4-tier Repository Coverage Panel.
+2. Open "PR Explorer" -> Search, filter, and paginate without arbitrary truncation.
+3. Select any PR and click "Analyze PR" -> Receive FalkorDB graph-backed candidate ranking.
+4. Inspect "Evidence" tab -> See explain_path evidence, file overlaps, and interactive subgraph.
+5. Demonstrate graph algorithm -> View betweenness centrality in Repository Health.
+6. Run MCP tool -> keystone:rank_reviewers returns identical graph-scored candidate rankings.
+7. Run preset Cypher query -> Confirm read-only guard, bounding LIMIT, and fast graph traversal.
+8. Dispatch action -> Record a clearly labeled DRY_RUN or SHADOW entry in the Action Ledger.
+Credentials: FALKOR_HOST, FALKOR_PORT, FALKOR_USER, FALKOR_PASS; GITHUB_TOKEN optional (required for live sync).
+```
+
+---
+
 ## The Primary User Journey
 
 Keystone is organized around an intuitive 8-step journey across 3 focused application sections:

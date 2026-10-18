@@ -114,7 +114,7 @@
         <div style="display: flex; align-items: center; gap: 12px;">
           <div style="text-align: right; font-size: 11px;">
             <span style="color: #64748B; display: block;">Last Synced</span>
-            <strong id="coverage-last-synced" style="color: #0F172A;">October 18, 2026</strong>
+            <strong id="coverage-last-synced" style="color: #0F172A;">—</strong>
           </div>
           <button onclick="switchMainSection('explorer')" class="btn btn-secondary btn-sm">
             <span>🔎 Open PR Explorer</span>
@@ -125,27 +125,27 @@
       <!-- Core Coverage Metrics Grid: Universe, Ingested, Active Window, Showing/Page -->
       <div class="coverage-metrics-grid">
         <div class="coverage-metric-card">
-          <div class="coverage-metric-value" id="cov-github-total">35,842</div>
+          <div class="coverage-metric-value" id="cov-github-total">—</div>
           <div class="coverage-metric-label">PRs available on GitHub</div>
-          <div style="font-size: 10px; color: #64748B; margin-top: 2px;" id="cov-discovered-sub">12,400 discovered</div>
+          <div style="font-size: 10px; color: #64748B; margin-top: 2px;" id="cov-discovered-sub">— discovered</div>
         </div>
 
         <div class="coverage-metric-card">
-          <div class="coverage-metric-value" id="cov-ingested" style="color: #2563EB;">2,460</div>
+          <div class="coverage-metric-value" id="cov-ingested" style="color: #2563EB;">—</div>
           <div class="coverage-metric-label">PRs ingested into Keystone</div>
-          <div style="font-size: 10px; color: #2563EB; margin-top: 2px;" id="cov-ingested-pct">7.0% of GitHub universe</div>
+          <div style="font-size: 10px; color: #2563EB; margin-top: 2px;" id="cov-ingested-pct">—</div>
         </div>
 
         <div class="coverage-metric-card">
-          <div class="coverage-metric-value" id="cov-analysis-window" style="color: #16A34A;">1,875</div>
+          <div class="coverage-metric-value" id="cov-analysis-window" style="color: #16A34A;">—</div>
           <div class="coverage-metric-label">PRs in active analysis window</div>
           <div style="font-size: 10px; color: #16A34A; margin-top: 2px;" id="cov-window-label">Last 90 days</div>
         </div>
 
         <div class="coverage-metric-card">
-          <div class="coverage-metric-value" id="cov-showing-count">50</div>
-          <div class="coverage-metric-label" id="cov-page-info">Showing PRs · Page 1 of 38</div>
-          <div style="font-size: 10px; color: #64748B; margin-top: 2px;" id="cov-matching-sub">1,875 matching filters</div>
+          <div class="coverage-metric-value" id="cov-showing-count">—</div>
+          <div class="coverage-metric-label" id="cov-page-info">Showing PRs · Page —</div>
+          <div style="font-size: 10px; color: #64748B; margin-top: 2px;" id="cov-matching-sub">— matching filters</div>
         </div>
       </div>
     </div>
@@ -795,11 +795,14 @@
                 </label>
                 <select id="ingest-limit-select" class="form-select" style="width: auto;">
                   <option value="50">50 Merged PRs</option>
-                  <option value="100" selected>100 Merged PRs</option>
+                  <option value="100">100 Merged PRs</option>
                   <option value="250">250 Merged PRs</option>
-                  <option value="500">500 Merged PRs</option>
+                  <option value="500" selected>500 Merged PRs (Batch size: 500 (default))</option>
                   <option value="1000">1,000 Merged PRs</option>
                 </select>
+                <div style="font-size: 11px; color: #64748B; margin-top: 4px; max-width: 320px;">
+                  Batch size = number of PRs fetched per ingestion job page (older PRs may remain un-ingested until included in later batches).
+                </div>
               </div>
 
               <div id="ingest-date-range-container" style="display: none; gap: 8px; align-items: center;">
