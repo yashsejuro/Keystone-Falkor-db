@@ -116,11 +116,19 @@ def register_repo(repo_slug: str, graph_name: Optional[str] = None) -> str:
     return key
 
 
-def unregister_repo(repo_slug_or_key: str, drop_graph: bool = False) -> dict:
-    """Unregister a repository from the registry and optionally delete its FalkorDB graph."""
+def unregister_repo(repo_slug_or_key: str, drop_graph: bool = True) -> dict:
+    """Unregister a repository from the registry and delete its FalkorDB graph.
+
+    Args:
+        repo_slug_or_key: Repository slug (owner/name) or short key.
+        drop_graph: If True (default), actually drops the FalkorDB graph.
+    """
+    import logging as _logging
+    _log = _logging.getLogger("keystone.graph_client")
+
     clean = repo_slug_or_key.strip().lower()
-    
-    # Identify canonical key and graph name
+
+    # Identify canonical key and graph name by searching both keys and slugs
     target_key = None
     target_graph = None
     target_slug = None
@@ -130,57 +138,97 @@ def unregister_repo(repo_slug_or_key: str, drop_graph: bool = False) -> dict:
         target_graph = REPOS[clean]
         target_slug = REPO_SLUGS.get(clean, clean)
     else:
-        for k, slug in REPO_SLUGS.items():
-            if slug.lower() == clean:
+        for k, slug in list(REPO_SLUGS.items()):
+            if slug.lower() == clean or k == clean:
                 target_key = k
                 target_graph = REPOS.get(k)
                 target_slug = slug
                 break
 
-    if not target_key:
-        raise ValueError(f"Repository '{repo_slug_or_key}' is not registered.")
+    if not target_key or not target_graph:
+        raise ValueError(
+            f"Repository '{repo_slug_or_key}' is not registered. "
+            f"Registered keys: {list(REPOS.keys())}"
+        )
 
     # Guard against accidental deletion of core sample repositories
-    if target_key in ("pydantic", "fastapi"):
-        raise ValueError(f"Core demonstration repository '{target_key}' cannot be deleted.")
+    if target_key in ("pydantic", "fastapi") or (target_slug or "").lower() in (
+        "pydantic/pydantic", "fastapi/fastapi"
+    ):
+        raise ValueError(
+            f"Core demonstration repository '{target_slug or target_key}' cannot be deleted. "
+            "It is required for the judge demo."
+        )
+
+    # Collect ALL keys that map to the same graph so we clean everything
+    all_keys_for_graph = [
+        k for k, v in list(REPOS.items()) if v == target_graph
+    ]
 
     with _REGISTRY_LOCK:
-        # Remove from in-memory maps
-        REPOS.pop(target_key, None)
-        REPO_SLUGS.pop(target_key, None)
-        if target_slug:
-            REPOS.pop(target_slug.lower(), None)
-            REPO_SLUGS.pop(target_slug.lower(), None)
+        # Remove ALL in-memory map entries for this graph
+        for k in all_keys_for_graph:
+            REPOS.pop(k, None)
+            REPO_SLUGS.pop(k, None)
 
-        # Remove from repositories.json
+        # Remove from repositories.json (all matching keys)
         if REGISTRY_PATH.exists():
             try:
                 saved = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
-                saved.pop(target_key, None)
+                for k in all_keys_for_graph:
+                    saved.pop(k, None)
+                # Also remove by slug and short-name
                 if target_slug:
                     saved.pop(target_slug.lower(), None)
                 REGISTRY_PATH.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
-            except (OSError, ValueError):
-                pass
+                _log.info(f"[unregister_repo] Removed registry entries for {all_keys_for_graph}")
+            except (OSError, ValueError) as e:
+                _log.warning(f"[unregister_repo] Could not update registry file: {e}")
 
     _graph_for.cache_clear()
     METADATA_CACHE.invalidate()
 
     graph_dropped = False
+    graph_drop_error = None
+
     if drop_graph and target_graph:
         try:
             db_conn = _db()
-            db_conn.select_graph(target_graph).delete()
-            graph_dropped = True
-        except Exception:
-            pass
+            # List existing graphs to confirm the target exists before deleting
+            existing = []
+            try:
+                existing = [g for g in db_conn.list_graphs() if g == target_graph]
+            except Exception:
+                pass  # list_graphs may not be available on all versions
+
+            if existing or not existing:  # attempt deletion regardless
+                db_conn.select_graph(target_graph).delete()
+                graph_dropped = True
+                _log.info(f"[unregister_repo] Dropped FalkorDB graph '{target_graph}'")
+        except Exception as exc:
+            graph_drop_error = str(exc)
+            _log.error(
+                f"[unregister_repo] Failed to drop FalkorDB graph '{target_graph}': {exc}",
+                exc_info=True,
+            )
+            # Re-raise so the API returns a 500 with a real error message
+            raise RuntimeError(
+                f"Repository was unregistered from the registry but FalkorDB graph "
+                f"'{target_graph}' could not be deleted: {exc}"
+            ) from exc
 
     return {
         "ok": True,
         "repo": target_slug or target_key,
         "graph_name": target_graph,
         "graph_dropped": graph_dropped,
-        "message": f"Repository '{target_slug or target_key}' unregistered successfully."
+        "keys_removed": all_keys_for_graph,
+        "message": (
+            f"Repository '{target_slug or target_key}' and its FalkorDB graph "
+            f"'{target_graph}' were deleted successfully."
+            if graph_dropped
+            else f"Repository '{target_slug or target_key}' unregistered (graph not dropped)."
+        )
     }
 
 

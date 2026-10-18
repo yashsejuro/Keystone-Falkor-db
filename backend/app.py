@@ -177,12 +177,16 @@ async def api_repositories():
 
 @app.delete("/api/repositories/{repo:path}")
 async def api_delete_repository(repo: str, drop_graph: bool = True):
-    """Unregister a repository after usage and delete its FalkorDB graph."""
+    """Unregister a repository and permanently delete its FalkorDB graph."""
     try:
         res = await run_in_threadpool(unregister_repo, repo, drop_graph)
         return JSONResponse(res)
     except ValueError as ve:
         return JSONResponse({"error": str(ve)}, status_code=400)
+    except RuntimeError as re:
+        # Graph was removed from registry but FalkorDB deletion failed
+        logger.error(f"Graph deletion failed for {repo}: {re}", exc_info=True)
+        return JSONResponse({"error": str(re), "graph_dropped": False}, status_code=500)
     except Exception as e:
         logger.error(f"Failed to unregister repository {repo}: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
