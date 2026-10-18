@@ -17,14 +17,24 @@ REPO = sys.argv[1] if len(sys.argv) > 1 else "pydantic/pydantic"
 # LIMIT represents the target batch size for this ingestion job, not the repository's total PR count.
 LIMIT = int(sys.argv[2]) if len(sys.argv) > 2 else 500
 
-# Canonical collision-safe graph name lookup / registration
-if "/" in REPO:
-    parts = REPO.strip().split("/")
-    GRAPH_NAME = register_repo(REPO.strip())
-    # Retrieve the graph name assigned by registry
-    GRAPH_NAME = REPOS.get(GRAPH_NAME, make_graph_name(parts[0], parts[1]))
-else:
-    GRAPH_NAME = REPOS.get(REPO.lower(), f"keystone_{REPO}")
+
+def get_graph_name(repo_slug: str) -> str:
+    repo_slug = repo_slug.strip()
+    if "/" not in repo_slug:
+        return REPOS.get(repo_slug.lower(), f"keystone_{repo_slug}")
+
+    owner, name = [part.strip() for part in repo_slug.split("/", 1)]
+    if not owner or not name:
+        return f"keystone_{repo_slug.replace('/', '_')}"
+
+    try:
+        canonical_key = register_repo(repo_slug)
+        return REPOS.get(canonical_key, make_graph_name(owner, name))
+    except Exception:
+        return make_graph_name(owner, name)
+
+
+GRAPH_NAME = get_graph_name(REPO)
 
 H = {
     "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
@@ -34,7 +44,7 @@ H = {
 session = requests.Session()
 retry = Retry(
     total=6,
-    backoff_factor=2,          # 0s, 2s, 4s, 8s, 16s, 32s
+    backoff_factor=2,
     status_forcelist=[500, 502, 503, 504, 429],
     allowed_methods=["GET"],
     raise_on_status=False,
@@ -177,13 +187,15 @@ def main():
 
     page, done = 1, 0
     while start + done < LIMIT:
-        prs = gh(f"https://api.github.com/repos/{REPO}/pulls",
-                 {"state": "closed", "sort": "updated", "direction": "desc",
-                  "per_page": 100, "page": page})
+        prs = gh(
+            f"https://api.github.com/repos/{REPO}/pulls",
+            {"state": "closed", "sort": "updated", "direction": "desc", "per_page": 100, "page": page},
+        )
         if not prs:
             print(f"  [page {page} empty, stopping]")
             break
 
+        page_processed = False
         for pr in prs:
             if start + done >= LIMIT:
                 break
@@ -197,10 +209,15 @@ def main():
                 print(f"  [skip #{pr['number']}] {type(e).__name__}: {e}")
                 continue
             done += 1
+            page_processed = True
             if done % 25 == 0:
                 print(f"  +{done} new / {start + done} total / {LIMIT} batch limit")
-            page += 1
-        time.sleep(1)   # gentle between pages
+
+        if not page_processed:
+            break
+
+        page += 1
+        time.sleep(1)
 
     print(f"\nDone. Added {done} new PRs.")
     print(f"Total nodes: {graph.query('MATCH (n) RETURN count(n)').result_set[0][0]}")
