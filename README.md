@@ -44,52 +44,6 @@ graph LR
   Reviewer -->|explains expertise for| File
 ```
 
-## Quick start
-
-### Prerequisites
-
-- Python 3.11 or later
-- A reachable FalkorDB instance
-- A GitHub token only when ingesting a real repository or dispatching actions
-
-### 1. Create a local environment and install dependencies
-
-```bash
-python -m venv .venv
-# PowerShell
-.\.venv\Scripts\Activate.ps1
-
-pip install -r requirements.txt
-```
-
-### 2. Configure the app
-
-Copy the example file and provide your FalkorDB connection details:
-
-```bash
-Copy-Item .env.example .env
-```
-
-Set `FALKOR_HOST`, `FALKOR_PORT`, `FALKOR_USER`, and `FALKOR_PASS` in `.env`.
-For live GitHub ingestion, also set `GITHUB_TOKEN`. Keep `KEYSTONE_WRITE_REPOS`
-empty unless you intentionally want to allow `LIVE` actions for listed
-`owner/repository` values.
-
-### 3. Run Keystone
-
-```bash
-python app.py
-```
-
-Open [http://localhost:3000](http://localhost:3000) for the web interface, or
-[http://localhost:3000/mcp](http://localhost:3000/mcp) for the MCP explorer.
-
-### 4. Run the test suite
-
-```bash
-pytest -q
-```
-
 ## Core capabilities
 
 | Capability | What it provides |
