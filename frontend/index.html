@@ -4,895 +4,672 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Keystone — Graph-Powered PR Reviewer Routing & Knowledge Risk</title>
-  <meta name="description" content="Keystone uses FalkorDB graph algorithms to find the right PR reviewers, surface knowledge risk, and explain every decision as a highlighted subgraph path.">
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <meta name="description" content="Keystone uses FalkorDB graph algorithms to find the right pull request reviewers, surface knowledge risk, and explain decisions transparently.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <link rel="stylesheet" href="/css/style.css">
 </head>
-<body class="min-h-screen flex flex-col antialiased">
-  <div class="bg-orbs"></div>
-  <a class="sr-only focus:not-sr-only focus:p-4 focus:bg-indigo-600 focus:text-white" href="#workspace">Skip to workspace</a>
+<body>
 
   <!-- =================== HEADER =================== -->
-  <header class="sticky top-0 z-40" style="background: rgba(6, 7, 14, 0.85); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(99, 102, 241, 0.1);">
-    <div class="max-w-[1400px] mx-auto px-6 py-3.5 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <a href="/" class="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black text-white"
-             style="background: linear-gradient(135deg, #6366f1, #7c3aed); box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);">
+  <header style="background: #FFFFFF; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 50;">
+    <div style="max-w: 1400px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+      
+      <!-- Brand & Title -->
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 36px; height: 36px; border-radius: 8px; background: #2563EB; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;">
           K
-        </a>
+        </div>
         <div>
-          <div class="flex items-center gap-2">
-            <a href="/" class="font-bold text-[15px] text-white tracking-tight hover:text-indigo-300 transition">Keystone</a>
-            <span class="badge badge-brand text-[10px]">
-              <span>🏆</span> Track 01: Agents on Connected Data
-            </span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <a href="/" style="font-size: 16px; font-weight: 700; color: #0F172A; text-decoration: none;">Keystone</a>
+            <span class="badge badge-blue">Graph Review Intelligence</span>
           </div>
-          <p class="text-[11px] text-slate-400 mt-0.5">Graph-powered PR reviewer routing & knowledge risk agent</p>
+          <p style="font-size: 11px; color: #64748B; margin-top: 1px;">Reviewer routing and knowledge risk on FalkorDB</p>
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
-        <nav class="hidden md:flex items-center gap-4 text-xs text-slate-400 mr-2">
-          <a href="#hero" class="hover:text-indigo-300 transition">Overview</a>
-          <a href="#pillars" class="hover:text-indigo-300 transition">Track Pillars</a>
-          <a href="#workspace" class="hover:text-indigo-300 transition">Agent Workspace</a>
-        </nav>
+      <!-- Navigation Tabs (3 Primary Sections) -->
+      <nav style="display: flex; align-items: center; gap: 4px;" role="tablist">
+        <button id="nav-btn-routing" role="tab" aria-selected="true" onclick="switchMainSection('routing')" class="nav-tab-btn active">
+          <span>📋</span> 1. Review Routing
+        </button>
+        <button id="nav-btn-evidence" role="tab" aria-selected="false" onclick="switchMainSection('evidence')" class="nav-tab-btn">
+          <span>🔍</span> 2. Evidence
+        </button>
+        <button id="nav-btn-health" role="tab" aria-selected="false" onclick="switchMainSection('health')" class="nav-tab-btn">
+          <span>⚙️</span> 3. Repository Health
+        </button>
+      </nav>
 
-        <div class="flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style="background: rgba(14, 18, 36, 0.6); border: 1px solid var(--line);">
-          <span class="text-slate-400 font-medium">Repo:</span>
-          <select aria-label="Select repository" id="repo-select" onchange="onRepoChange(this.value)"
-                  class="font-mono font-semibold text-[#a5b4fc] bg-transparent focus:outline-none cursor-pointer text-xs">
+      <!-- Right Controls: Repo Selector & Connection Status -->
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+          <label for="repo-select" style="color: #64748B; font-weight: 500;">Repo:</label>
+          <select id="repo-select" onchange="onRepoSelectChange(this.value)" class="form-select" style="width: auto; padding: 4px 10px; font-size: 12px; font-weight: 600;">
             <option value="pydantic">pydantic</option>
             <option value="fastapi">fastapi</option>
           </select>
         </div>
 
-        <div id="conn-pill" class="flex items-center gap-2 text-xs px-3 py-2 rounded-xl" style="background: rgba(5, 46, 31, 0.4); border: 1px solid rgba(52, 211, 153, 0.2);">
-          <span class="pulse-dot"></span>
-          <span id="conn-text" class="text-emerald-300 font-medium">FalkorDB Connected</span>
+        <div id="conn-pill" class="badge badge-green" style="padding: 4px 10px;">
+          <span class="status-dot online" id="conn-dot"></span>
+          <span id="conn-text" style="font-weight: 500;">Connected</span>
         </div>
 
-        <a href="/mcp" class="flex items-center gap-1.5 text-xs px-3.5 py-2 rounded-xl font-medium text-violet-300 hover:text-violet-200 transition"
-           style="background: rgba(124, 58, 237, 0.12); border: 1px solid rgba(124, 58, 237, 0.25);">
-          <span>⚡</span>
-          <span>FastMCP Tools</span>
+        <a href="/mcp" class="btn btn-secondary btn-sm" title="View Model Context Protocol Tools">
+          <span>⚡ FastMCP</span>
         </a>
       </div>
+
     </div>
   </header>
 
-  <!-- =================== DEDICATED HERO SECTION =================== -->
-  <section id="hero" class="relative z-10 max-w-[1400px] mx-auto px-6 pt-16 pb-12 text-center space-y-8">
-    <div class="inline-flex items-center gap-2 hero-badge">
-      <span class="text-indigo-400">⚡</span>
-      <span>Autonomous Review Intelligence Built on FalkorDB Graph Engine</span>
-    </div>
-
-    <h1 class="hero-title max-w-4xl mx-auto text-white">
-      Deterministic Reviewer Routing on <span class="gradient-text">Connected Code Graphs</span>
-    </h1>
-
-    <p class="text-base sm:text-lg text-slate-300 max-w-3xl mx-auto leading-relaxed">
-      Keystone replaces noisy guesswork with graph intelligence. It traverses git histories, co-change topologies,
-      and betweenness centrality on FalkorDB to route pull requests, eliminate knowledge monopolies,
-      and explain every decision transparently.
-    </p>
-
-    <!-- CTAs -->
-    <div class="flex items-center justify-center gap-4 flex-wrap pt-2">
-      <button onclick="startInteractiveDemoTour()" class="btn-primary text-sm px-6 py-3 cursor-pointer group"
-              style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);">
-        <span>🎬</span>
-        <span>Start 1-Min Interactive Tour</span>
-      </button>
-      <a href="#workspace" class="btn-secondary text-sm px-6 py-3">
-        <span>🚀</span> Launch Agent Workspace
-      </a>
-      <button onclick="document.getElementById('workspace').scrollIntoView({behavior: 'smooth'}); switchTab('graph');" class="btn-secondary text-sm px-5 py-3">
-        <span>🕸️</span> Explore Knowledge Graph
-      </button>
-      <a href="/mcp" class="btn-secondary text-sm px-5 py-3">
-        <span>⚡</span> FastMCP Protocol Docs
-      </a>
-    </div>
-
-    <!-- Keyboard quick tip -->
-    <div class="flex items-center justify-center gap-3 text-xs text-slate-400 pt-1">
-      <span class="flex items-center gap-1.5 font-mono text-[11px]">
-        <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">Ctrl</kbd> + <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">K</kbd> to search 500 PRs
-      </span>
-      <span>·</span>
-      <span class="flex items-center gap-1.5 font-mono text-[11px]">
-        <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">1</kbd>-<kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">4</kbd> to switch tabs
-      </span>
-    </div>
-
-    <!-- Live Telemetry / Counters Banner -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto pt-6">
-      <div class="hero-card text-center">
-        <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Graph Nodes</span>
-        <div id="hero-nodes-count" class="text-2xl sm:text-3xl font-extrabold font-mono text-white mt-1">1,248</div>
-        <span class="text-[10px] text-slate-500 mt-0.5 block">PRs, Files & Contributors</span>
-      </div>
-      <div class="hero-card text-center">
-        <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Graph Edges</span>
-        <div id="hero-edges-count" class="text-2xl sm:text-3xl font-extrabold font-mono text-indigo-300 mt-1">11,042</div>
-        <span class="text-[10px] text-slate-500 mt-0.5 block">TOUCHES, REVIEWS, CO_CHANGES</span>
-      </div>
-      <div class="hero-card text-center">
-        <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Multigraph Topology</span>
-        <div id="hero-repos-count" class="text-2xl sm:text-3xl font-extrabold font-mono text-emerald-300 mt-1">2 Repos</div>
-        <span class="text-[10px] text-slate-500 mt-0.5 block">Isolated Tenant Codebases</span>
-      </div>
-      <div class="hero-card text-center">
-        <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Scoring Engine</span>
-        <div class="text-2xl sm:text-3xl font-extrabold font-mono text-purple-300 mt-1">Zero LLM</div>
-        <span class="text-[10px] text-slate-500 mt-0.5 block">100% Deterministic & Auditable</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- =================== TRACK 01 PILLARS SECTION =================== -->
-  <section id="pillars" class="relative z-10 max-w-[1400px] mx-auto px-6 py-8">
-    <div class="text-center max-w-2xl mx-auto mb-8">
-      <span class="text-xs font-bold uppercase tracking-widest text-indigo-400">Track 01 Rubric</span>
-      <h2 class="text-2xl font-bold text-white mt-1">Built Exactly for "Agents That Act on Connected Data"</h2>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
-      <div class="glass p-5 space-y-2 flex flex-col justify-between">
-        <div>
-          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm mb-3" style="background: rgba(99,102,241,0.2); color: #818cf8;">1</div>
-          <h3 class="text-sm font-bold text-white">Multi-Hop Reasoning</h3>
-          <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-            Traverses from PRs through files, co-change bridges, and historical reviews to score reviewer affinity across multi-hop subgraphs.
-          </p>
-        </div>
-        <span class="badge badge-brand text-[9px] mt-2 font-mono">Shortest Path</span>
-      </div>
-
-      <div class="glass p-5 space-y-2 flex flex-col justify-between">
-        <div>
-          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm mb-3" style="background: rgba(6,182,212,0.2); color: #06b6d4;">2</div>
-          <h3 class="text-sm font-bold text-white">Algorithms as Tools</h3>
-          <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-            Uses native FalkorDB algorithms like Betweenness Centrality on CO_CHANGES to calculate exact code blast radius.
-          </p>
-        </div>
-        <span class="badge badge-ok text-[9px] mt-2 font-mono">algo.betweenness</span>
-      </div>
-
-      <div class="glass p-5 space-y-2 flex flex-col justify-between">
-        <div>
-          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm mb-3" style="background: rgba(168,85,247,0.2); color: #a855f7;">3</div>
-          <h3 class="text-sm font-bold text-white">FastMCP Integration</h3>
-          <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-            Exposes 6 standard tools over Model Context Protocol so Claude, Cursor, or autonomous agents can query graph insights.
-          </p>
-        </div>
-        <a href="/mcp" class="badge badge-brand text-[9px] mt-2 font-mono hover:opacity-80">Explore FastMCP ▸</a>
-      </div>
-
-      <div class="glass p-5 space-y-2 flex flex-col justify-between">
-        <div>
-          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm mb-3" style="background: rgba(251,191,36,0.2); color: #fbbf24;">4</div>
-          <h3 class="text-sm font-bold text-white">Safe Action Dispatch</h3>
-          <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-            Human approval gate with a shadow audit ledger to prevent spamming upstream repos unless explicitly authorized.
-          </p>
-        </div>
-        <span class="badge badge-warn text-[9px] mt-2 font-mono">Approval Gate</span>
-      </div>
-
-      <div class="glass p-5 space-y-2 flex flex-col justify-between">
-        <div>
-          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm mb-3" style="background: rgba(52,211,153,0.2); color: #34d399;">5</div>
-          <h3 class="text-sm font-bold text-white">Explainable Results</h3>
-          <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-            Every candidate ranking includes an interactive step-by-step visual path walk and full mathematical breakdown.
-          </p>
-        </div>
-        <span class="badge badge-ok text-[9px] mt-2 font-mono">Zero Black-Box</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- =================== MAIN WORKSPACE =================== -->
-  <main id="workspace" class="max-w-[1400px] mx-auto px-6 py-8 flex-1 w-full relative z-10">
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-      <!-- ========= LEFT SIDEBAR ========= -->
-      <div class="lg:col-span-4 space-y-5">
-
-        <!-- PR Selector Card -->
-        <div class="glass p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-              <span style="color: var(--brand);">▸</span> Pull Request Manager
-            </h2>
-            <span class="text-[10px] text-emerald-400 font-mono" id="pr-feed-count">Loading 500 PRs...</span>
-          </div>
-
-          <!-- Live Search Filter for 500 PRs -->
-          <div>
-            <label for="pr-filter-input" class="block text-[11px] font-medium text-slate-400 mb-1">Instant PR Search</label>
-            <input type="text" id="pr-filter-input" oninput="filterPrDropdown(this.value)"
-                   placeholder="Search 500 PRs by title, #num, @author..."
-                   class="w-full rounded-xl px-3 py-2 text-xs text-indigo-200 placeholder-slate-500 font-mono focus:outline-none"
-                   style="background: rgba(6, 7, 14, 0.6); border: 1px solid var(--line);">
-          </div>
-
-          <!-- Filter Pills -->
-          <div class="flex items-center gap-1.5 text-xs flex-wrap">
-            <button id="pr-filter-tab-all" onclick="setPrFilterTab('all')" class="badge badge-brand cursor-pointer">All (<span id="pr-count-all">0</span>)</button>
-            <button id="pr-filter-tab-reviewed" onclick="setPrFilterTab('reviewed')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); color: var(--text-muted);">Reviewed (<span id="pr-count-reviewed">0</span>)</button>
-            <button id="pr-filter-tab-unreviewed" onclick="setPrFilterTab('unreviewed')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); color: var(--text-muted);">Unreviewed (<span id="pr-count-unreviewed">0</span>)</button>
-            <button id="pr-filter-tab-critical" onclick="setPrFilterTab('critical')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); color: #fda4af;">🚨 High Risk (<span id="pr-count-critical">0</span>)</button>
-          </div>
-
-          <div>
-            <div class="flex items-center justify-between mb-1">
-              <label for="pr-select" class="text-[11px] font-medium text-slate-400">Select from graph</label>
-              <button onclick="openPrTriageModal()" class="text-[10px] text-violet-400 hover:text-violet-300 font-medium cursor-pointer underline">
-                Browse Full Triage View ↗
-              </button>
-            </div>
-            <select id="pr-select" onchange="onSelectPrFromDropdown(this.value)"
-                    class="w-full rounded-xl px-3 py-2.5 text-xs text-[#a5b4fc] font-mono focus:outline-none cursor-pointer truncate"
-                    style="background: rgba(6, 7, 14, 0.6); border: 1px solid var(--line);">
-              <option value="13997">#13997: Support explicit by_alias</option>
-            </select>
-          </div>
-
-          <button onclick="openPrTriageModal()" class="w-full btn-secondary text-xs py-2 flex items-center justify-center gap-2">
-            <span>📋</span> Open PR Triage Browser (500 Ingested)
-          </button>
-
-          <div>
-            <label for="pr-input" class="block text-[11px] font-medium text-slate-400 mb-1.5">Or enter exact PR number</label>
-            <div class="flex gap-2">
-              <input type="number" id="pr-input" value="13997" min="1"
-                     class="flex-1 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono font-semibold"
-                     style="background: rgba(6, 7, 14, 0.6); border: 1px solid var(--line);">
-              <button onclick="runInvestigation()" class="btn-secondary text-xs px-4">Analyze</button>
-            </div>
-          </div>
-
-          <button id="run-btn" onclick="runInvestigation()"
-                  class="w-full btn-primary text-xs py-3 flex items-center justify-center gap-2">
-            <span id="btn-icon">🚀</span>
-            <span id="btn-label">Run Knowledge Analysis</span>
-          </button>
-
-          <!-- Benchmark presets -->
-          <div class="pt-3" style="border-top: 1px solid var(--line);">
-            <div class="flex items-center justify-between mb-2">
-              <span class="text-[11px] font-medium text-slate-400">Curated showcase PRs</span>
-              <span id="preset-repo-tag" class="text-[10px] font-mono text-violet-400">pydantic</span>
-            </div>
-            <div id="benchmark-buttons-container" class="grid grid-cols-2 gap-2"></div>
-          </div>
-        </div>
-
-        <!-- PR Telemetry -->
-        <div class="glass p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-              <span style="color: var(--warn);">▸</span> PR Impact Telemetry
-            </h2>
-            <span id="blast-badge" class="badge badge-warn text-[10px]">High Impact</span>
-          </div>
-
-          <div class="grid grid-cols-2 gap-3">
-            <div class="stat-card">
-              <div class="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Code Churn</div>
-              <div id="stat-churn" class="text-base font-bold font-mono text-white mt-1.5">+74 / -15</div>
-              <div id="stat-files-count" class="text-[10px] text-slate-500 mt-1">4 files touched</div>
-            </div>
-            <div class="stat-card">
-              <div class="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Blast Radius</div>
-              <div id="stat-blast-text" class="text-base font-bold font-mono mt-1.5" style="color: var(--warn);">0.486 peak</div>
-              <div class="text-[10px] text-slate-500 mt-1">betweenness centrality</div>
-            </div>
-          </div>
-
-          <div class="stat-card space-y-2 text-xs">
-            <div class="flex items-center justify-between text-slate-400">
-              <span>Bus Factor Exposure</span>
-              <span id="stat-bf-exposure" class="font-mono font-semibold" style="color: var(--danger);">2 files flagged</span>
-            </div>
-            <div class="flex items-center justify-between text-slate-400">
-              <span>Candidate Reviewers</span>
-              <span id="stat-pool-depth" class="font-mono font-semibold text-[#a5b4fc]">9 evaluated</span>
-            </div>
-            <div class="flex items-center justify-between text-slate-400">
-              <span>Knowledge Distribution</span>
-              <span id="stat-coverage-rate" class="font-mono font-semibold text-emerald-400">75% top match</span>
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- ========= RIGHT CONTENT ========= -->
-      <div class="lg:col-span-8 space-y-5">
-
-        <!-- Tab Navigation -->
-        <nav role="tablist" aria-label="Keystone views" class="flex overflow-x-auto pb-px" style="border-bottom: 1px solid var(--line);">
-          <button role="tab" aria-selected="true" id="tab-btn-routing" onclick="switchTab('routing')" class="tab-btn active flex items-center gap-1.5">
-            <span class="text-[10px] font-mono px-1 rounded bg-slate-800 text-slate-400">1</span>
-            <span>🎯 Review Routing</span>
-          </button>
-          <button role="tab" aria-selected="false" id="tab-btn-explain" onclick="switchTab('explain')" class="tab-btn flex items-center gap-1.5">
-            <span class="text-[10px] font-mono px-1 rounded bg-slate-800 text-slate-400">2</span>
-            <span>🔍 Explainability</span>
-          </button>
-          <button role="tab" aria-selected="false" id="tab-btn-graph" onclick="switchTab('graph')" class="tab-btn flex items-center gap-1.5">
-            <span class="text-[10px] font-mono px-1 rounded bg-slate-800 text-slate-400">3</span>
-            <span>🕸️ Knowledge Graph</span>
-          </button>
-          <button role="tab" aria-selected="false" id="tab-btn-health" onclick="switchTab('health')" class="tab-btn flex items-center gap-1.5">
-            <span class="text-[10px] font-mono px-1 rounded bg-slate-800 text-slate-400">4</span>
-            <span>📊 Health & Audit</span>
-            <span id="ledger-badge" class="text-[10px] font-mono px-1.5 py-0.5 rounded-md" style="background: rgba(99, 102, 241, 0.15); color: #a5b4fc;">0</span>
-          </button>
-        </nav>
-
-        <!-- ====== TAB 1: Review Routing ====== -->
-        <div id="tab-routing" class="tab-panel active space-y-5">
-
-          <!-- PR Details -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-start justify-between flex-wrap gap-3">
-              <div>
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span id="pr-badge-num" class="badge badge-brand font-mono">PR #13997</span>
-                  <span id="pr-badge-state" class="badge badge-ok">MERGED</span>
-                  <span id="pr-badge-blast" class="badge badge-warn text-[10px]">Moderate Blast Radius</span>
-                  <span id="pr-repo-indicator" class="text-xs text-slate-400 font-mono">pydantic</span>
-                  <a id="pr-github-link" href="https://github.com/pydantic/pydantic/pull/13997" target="_blank" rel="noopener"
-                     class="text-[11px] font-mono text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1 underline ml-1">
-                    <span>GitHub ↗</span>
-                  </a>
-                </div>
-                <h2 id="pr-title" class="text-lg font-bold text-white mt-2 leading-snug">
-                  Support explicit `by_alias` overriding `validate_by_alias` in validation JSON schemas
-                </h2>
-                <div class="flex items-center gap-4 text-xs text-slate-400 mt-2">
-                  <span>Author: <strong id="pr-author" class="text-slate-300">@contributor</strong></span>
-                  <span>·</span>
-                  <span id="pr-files-count">4 files</span>
-                  <span>·</span>
-                  <span id="pr-lines-changed" class="font-mono text-emerald-400">+74 / -15</span>
-                </div>
-              </div>
-
-              <!-- Quick PR Actions -->
-              <div class="flex items-center gap-2">
-                <button onclick="copyGitHubDossier()" class="btn-primary text-xs px-3.5 py-2 flex items-center gap-1.5 cursor-pointer">
-                  <span>📋</span>
-                  <span>Copy GitHub PR Comment</span>
-                </button>
-              </div>
-            </div>
-
-            <!-- What-If Simulation Bar -->
-            <div class="flex items-center justify-between flex-wrap gap-2 p-3 rounded-xl text-xs"
-                 style="background: rgba(14, 18, 36, 0.7); border: 1px dashed rgba(99, 102, 241, 0.35);">
-              <div class="flex items-center gap-2">
-                <span class="text-sm">🧪</span>
-                <span class="font-bold text-indigo-300">What-If Simulation:</span>
-                <span class="text-slate-400">Simulate maintainer unavailable / on leave:</span>
-                <select id="what-if-select" onchange="onWhatIfChange(this.value)"
-                        class="font-mono text-xs text-indigo-200 bg-[#0c0f1a] border border-indigo-500/30 rounded-lg px-2.5 py-1 focus:outline-none cursor-pointer">
-                  <option value="">(None — Normal Routing)</option>
-                </select>
-              </div>
-              <span id="what-if-status" class="text-[11px] font-mono text-emerald-400">✓ All reviewers available</span>
-            </div>
-
-            <!-- Touched files list -->
-            <div class="pt-3" style="border-top: 1px solid var(--line);">
-              <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">Touched Files Analysis</span>
-              <div id="pr-files-list" class="flex flex-wrap gap-2"></div>
-            </div>
-          </div>
-
-          <!-- Primary & Secondary Reviewer Pairing -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <span>🤝</span> Optimal Reviewer Pairing
-                </h3>
-                <p class="text-xs text-slate-400 mt-0.5">Primary reviewer + cross-training candidate to prevent knowledge siloing</p>
-              </div>
-              <span class="badge badge-brand text-[10px]">Anti-Bottleneck Pairing</span>
-            </div>
-
-            <!-- User POV Banner explaining the pairing value -->
-            <div class="p-3 rounded-xl flex items-start gap-2.5 text-xs text-indigo-200"
-                 style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2);">
-              <span class="text-base">💡</span>
-              <div class="leading-relaxed">
-                <strong>Why Two Reviewers?</strong> Routing always to the top reviewer creates maintainer burnout and a single point of failure (bus factor).
-                Keystone pairs the <strong>Primary Domain Expert</strong> for velocity with a <strong>Secondary Candidate</strong> for cross-training, spreading architectural knowledge across the team.
-              </div>
-            </div>
-
-            <div id="pairing-container" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
-            <div id="rationale-text" class="text-xs italic text-slate-300 pt-2" style="border-top: 1px solid var(--line);"></div>
-          </div>
-
-          <!-- Knowledge Risk Flags -->
-          <div class="glass p-5 space-y-3">
-            <h3 class="text-sm font-bold text-white flex items-center gap-2">
-              <span>🛡️</span> Knowledge Risk Detection
-            </h3>
-            <div id="risk-container" class="space-y-2"></div>
-          </div>
-
-          <!-- Evaluated Candidates Table -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <span>👥</span> All Evaluated Candidates
-                </h3>
-                <p class="text-xs text-slate-400 mt-0.5">Scored across file history, structural affinity, recency & fatigue</p>
-              </div>
-            </div>
-            <div class="overflow-x-auto">
-              <table class="w-full text-left text-xs">
-                <thead class="text-slate-400 uppercase font-semibold text-[10px]" style="border-bottom: 1px solid var(--line);">
-                  <tr>
-                    <th class="py-2.5 px-2">#</th>
-                    <th class="py-2.5 px-2">Reviewer</th>
-                    <th class="py-2.5 px-2 text-right">Score</th>
-                    <th class="py-2.5 px-2 text-right">Coverage</th>
-                    <th class="py-2.5 px-2 text-right">Shared</th>
-                    <th class="py-2.5 px-2 text-right">Bridges</th>
-                    <th class="py-2.5 px-2 text-right">90d Reviews</th>
-                    <th class="py-2.5 px-2">Last Active</th>
-                    <th class="py-2.5 px-2 text-center">Inspect</th>
-                  </tr>
-                </thead>
-                <tbody id="reviewers-body" class="font-mono"></tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Action Plan -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <span>⚡</span> Action Plan & Approval Gate
-                </h3>
-                <p class="text-xs text-slate-400 mt-0.5">Keystone proposes actions. You approve before execution.</p>
-              </div>
-              <span class="badge badge-warn text-[10px]">Awaiting Approval</span>
-            </div>
-            <div id="actions-container" class="space-y-2.5"></div>
-            <div class="flex gap-3">
-              <button id="apply-plan-btn" onclick="applyApprovedPlan()"
-                      class="flex-1 text-xs font-semibold py-2.5 rounded-xl cursor-pointer transition"
-                      style="background: linear-gradient(135deg, #059669, #10b981); color: white; box-shadow: 0 4px 16px rgba(16, 185, 129, 0.3);">
-                ✓ Approve & Execute Selected
-              </button>
-              <button onclick="switchTab('health')" class="btn-secondary text-xs px-5">View Audit Ledger</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- ====== TAB 2: Explainability ====== -->
-        <div id="tab-explain" class="tab-panel space-y-5">
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <span>🔍</span> Multi-Hop Traversal Explainability
-                </h3>
-                <p id="explain-header" class="text-xs text-slate-400 mt-1">How the candidate connects to touched files via graph traversals</p>
-              </div>
-              <div id="candidate-selector-segment" class="flex gap-1.5 p-1 rounded-xl text-xs" style="background: rgba(6, 7, 14, 0.5); border: 1px solid var(--line);"></div>
-            </div>
-
-            <!-- Graph Walk -->
-            <div id="graph-walk" class="p-5 rounded-xl space-y-4" style="background: rgba(6, 7, 14, 0.5); border: 1px solid var(--line);"></div>
-
-            <!-- Cypher Query Inspector for the Hop -->
-            <div class="p-4 rounded-xl space-y-2" style="background: rgba(6, 7, 14, 0.6); border: 1px solid var(--line);">
-              <div class="flex items-center justify-between">
-                <span class="text-[11px] font-bold text-violet-300 font-mono flex items-center gap-1.5">
-                  <span>⚡</span> Live OpenCypher Query for this Multi-Hop Traversal
-                </span>
-                <button onclick="copyCurrentHopCypher()" class="text-[10px] text-slate-400 hover:text-white underline cursor-pointer">
-                  Copy Cypher
-                </button>
-              </div>
-              <pre id="explain-cypher-code" class="text-[11px] font-mono text-indigo-200 overflow-x-auto p-2.5 rounded-lg bg-black/40">MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)-[c:CO_CHANGES]->(f2:File)
-MATCH (f2)<-[:TOUCHES]-(other:PullRequest)<-[:REVIEWED]-(r:Person)
-WHERE r.login = $reviewer
-RETURN r.login, sum(c.weight) AS affinity, count(DISTINCT f2) AS bridge_files</pre>
-            </div>
-
-            <!-- Formula Breakdown -->
-            <div class="p-5 rounded-xl space-y-3" style="background: rgba(6, 7, 14, 0.4); border: 1px solid var(--line);">
-              <h4 class="text-xs font-bold text-violet-300 uppercase tracking-wider flex items-center gap-2">
-                <span>🧮</span> Deterministic Scoring Formula (Zero LLM)
-              </h4>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                <div class="stat-card text-center">
-                  <div class="text-slate-400 text-[10px]">File Overlap</div>
-                  <div class="text-lg font-bold text-white mt-1">30%</div>
-                  <div class="text-slate-500 text-[9px] mt-1">shared / max</div>
-                </div>
-                <div class="stat-card text-center">
-                  <div class="text-slate-400 text-[10px]">Structural</div>
-                  <div class="text-lg font-bold text-white mt-1">30%</div>
-                  <div class="text-slate-500 text-[9px] mt-1">co-change × centrality</div>
-                </div>
-                <div class="stat-card text-center">
-                  <div class="text-slate-400 text-[10px]">Activity</div>
-                  <div class="text-lg font-bold text-white mt-1">20%</div>
-                  <div class="text-slate-500 text-[9px] mt-1">90-day reviews</div>
-                </div>
-                <div class="stat-card text-center">
-                  <div class="text-slate-400 text-[10px]">Recency</div>
-                  <div class="text-lg font-bold text-white mt-1">20%</div>
-                  <div class="text-slate-500 text-[9px] mt-1">e^(−Δt / 60d)</div>
-                </div>
-              </div>
-              <p class="text-[11px] text-slate-400 italic">Overload dampener: 0.7× multiplier applied if reviewer has &gt; 20 recent reviews.</p>
-            </div>
-
-            <!-- Shared Files -->
-            <div class="pt-3" style="border-top: 1px solid var(--line);">
-              <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Direct Shared Files</h4>
-              <div id="explain-files" class="space-y-2"></div>
-            </div>
-            <div class="pt-3" style="border-top: 1px solid var(--line);">
-              <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Co-Change Bridges</h4>
-              <div id="explain-bridges" class="space-y-2"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ====== TAB 3: Knowledge Graph ====== -->
-        <div id="tab-graph" class="tab-panel space-y-5">
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <span>🕸️</span> Interactive Subgraph Explorer
-                </h3>
-                <p class="text-xs text-slate-400 mt-0.5">Force-directed graph of PR, touched files, historical PRs & candidate reviewers</p>
-              </div>
-              <div class="flex items-center gap-3 text-[11px] font-mono">
-                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded" style="background: #6366f1;"></span>PR</span>
-                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded" style="background: #0891b2;"></span>File</span>
-                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded" style="background: #10b981;"></span>Reviewer</span>
-                <span class="flex items-center gap-1"><span class="w-3 h-3 rounded" style="background: #8b5cf6;"></span>Bridge</span>
-              </div>
-            </div>
-            <div id="network-canvas"></div>
-            <div id="node-inspector" class="stat-card text-xs hidden">
-              <div class="font-semibold text-violet-300" id="inspector-title">Node Details</div>
-              <div class="text-slate-400 mt-1" id="inspector-desc"></div>
-            </div>
-            <div class="flex justify-between items-center text-xs text-slate-500">
-              <span>Drag nodes · Scroll to zoom · Powered by FalkorDB</span>
-              <button onclick="rebuildGraphVisualization(currentResult)" class="btn-secondary text-xs px-3 py-1.5">↺ Reset Layout</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- ====== TAB 4: Health & Audit ====== -->
-        <div id="tab-health" class="tab-panel space-y-5">
-
-          <!-- FalkorDB Graph vs Relational Ablation Benchmark -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <div class="flex items-center gap-2">
-                  <span class="badge badge-brand text-[10px]">Track 01 Verification</span>
-                  <span class="badge badge-ok text-[10px]">Real Repository Ablation</span>
-                </div>
-                <h3 class="text-base font-bold text-white mt-1">FalkorDB Graph Scorer vs Relational Baseline</h3>
-                <p class="text-xs text-slate-400 mt-0.5">Time-split backtest on real merge history proving why graph topology beats relational queries</p>
-              </div>
-              <a href="/mcp" class="btn-secondary text-xs px-3.5 py-1.5">View FastMCP Tools</a>
-            </div>
-
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-              <div class="stat-card" style="border-color: rgba(52, 211, 153, 0.3);">
-                <div class="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">FalkorDB Graph Scorer</div>
-                <div id="bench-graph-top1" class="text-2xl font-bold font-mono text-emerald-300 mt-1">60.0%</div>
-                <div class="text-[10px] text-slate-400 mt-1">Top-1 Accuracy (<span id="bench-graph-top3" class="text-emerald-400">68.3%</span> Top-3)</div>
-              </div>
-
-              <div class="stat-card" style="border-color: rgba(99, 102, 241, 0.2);">
-                <div class="text-[10px] text-violet-400 font-bold uppercase tracking-wider">Relational Ablation</div>
-                <div id="bench-rel-top1" class="text-2xl font-bold font-mono text-violet-300 mt-1">50.0%</div>
-                <div class="text-[10px] text-slate-400 mt-1">Graph edges ablated (<span id="bench-rel-top3" class="text-violet-300">61.7%</span> Top-3)</div>
-              </div>
-
-              <div class="stat-card">
-                <div class="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Directory Baseline</div>
-                <div id="bench-dir-top1" class="text-2xl font-bold font-mono text-amber-300 mt-1">21.7%</div>
-                <div class="text-[10px] text-slate-400 mt-1">Folder-level heuristics (<span id="bench-dir-top3" class="text-amber-300">48.3%</span> Top-3)</div>
-              </div>
-
-              <div class="stat-card">
-                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Measured Graph Lift</div>
-                <div id="bench-graph-lift" class="text-2xl font-bold font-mono text-white mt-1">+20.0%</div>
-                <div class="text-[10px] text-emerald-400 mt-1">Lift over relational baseline</div>
-              </div>
-            </div>
-
-            <!-- Breakdown by PR Complexity -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs pt-1">
-              <div class="p-3 rounded-xl space-y-1.5" style="background: rgba(14, 18, 36, 0.6); border: 1px solid rgba(99, 102, 241, 0.2);">
-                <div class="flex items-center justify-between">
-                  <span class="font-bold text-indigo-300">⚡ Cross-Module Complex PRs (<span id="bench-cross-n">42</span> PRs)</span>
-                  <span class="badge badge-brand text-[9px] font-mono">+23.8% Lift</span>
-                </div>
-                <div class="text-[11px] text-slate-300">
-                  FalkorDB Graph Scorer: <strong id="bench-cross-graph" class="text-emerald-300 font-mono">61.9%</strong> vs Relational: <span id="bench-cross-rel" class="text-slate-400 font-mono">50.0%</span>
-                </div>
-                <p class="text-[10px] text-slate-400 leading-normal">
-                  On multi-directory changes where direct file overlap fails, FalkorDB's multi-hop co-change bridges deliver the highest advantage.
-                </p>
-              </div>
-
-              <div class="p-3 rounded-xl space-y-1.5" style="background: rgba(14, 18, 36, 0.6); border: 1px solid var(--line);">
-                <div class="flex items-center justify-between">
-                  <span class="font-bold text-slate-300">📄 Single-File PRs (<span id="bench-single-n">18</span> PRs)</span>
-                  <span class="badge badge-ok text-[9px] font-mono">55.6% Top-1</span>
-                </div>
-                <div class="text-[11px] text-slate-300">
-                  FalkorDB Graph Scorer: <strong id="bench-single-graph" class="text-emerald-300 font-mono">55.6%</strong> vs Relational: <span id="bench-single-rel" class="text-slate-400 font-mono">50.0%</span>
-                </div>
-                <p class="text-[10px] text-slate-400 leading-normal">
-                  Even on localized changes, betweenness centrality balances reviewer fatigue and preserves code health.
-                </p>
-              </div>
-            </div>
-
-            <div class="p-3.5 rounded-xl text-xs text-slate-300 leading-relaxed font-sans"
-                 style="background: rgba(99, 102, 241, 0.08); border: 1px solid var(--line);">
-              <strong>Why This Matters to Judges:</strong> A relational query only knows about direct file matches.
-              FalkorDB's multi-hop reasoning traverses <code>(PR)-[:TOUCHES]-&gt;(File)-[:CO_CHANGES]-&gt;(File)&lt;-[:REVIEWED]-(Person)</code>,
-              identifying maintainers of coupled architecture who never directly touched the file in this PR, but understand its impact.
-            </div>
-          </div>
-
-          <!-- Knowledge Health -->
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="glass p-5 space-y-3">
-              <div class="flex items-center justify-between">
-                <h3 class="text-sm font-semibold flex items-center gap-2" style="color: var(--danger);">
-                  <span>⚠️</span> Bus-Factor Risk Files
-                </h3>
-                <span class="text-[10px] text-slate-500 font-mono">&gt;60% single reviewer</span>
-              </div>
-              <div id="bus-factor-list" class="space-y-2 max-h-64 overflow-y-auto"></div>
-            </div>
-            <div class="glass p-5 space-y-3">
-              <div class="flex items-center justify-between">
-                <h3 class="text-sm font-semibold text-violet-300 flex items-center gap-2">
-                  <span>🌐</span> Critical Infrastructure
-                </h3>
-                <span class="text-[10px] text-slate-500 font-mono">betweenness centrality</span>
-              </div>
-              <div id="critical-files-list" class="space-y-2 max-h-64 overflow-y-auto"></div>
-            </div>
-          </div>
-
-          <!-- Action Audit Ledger -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <div class="flex items-center gap-2">
-                  <span class="badge badge-brand text-[10px]">Agent Impact & Dispatch</span>
-                  <span id="ledger-count-pill" class="badge badge-ok text-[10px]">0 Actions</span>
-                </div>
-                <h3 class="text-base font-bold text-white mt-1">Action Dispatch Dashboard</h3>
-                <p class="text-xs text-slate-400 mt-0.5">Live executions vs shadow-mode logging to prevent upstream spam</p>
-              </div>
-              <button onclick="clearActionLedger()" class="btn-secondary text-xs px-3 py-1.5">Reset Ledger</button>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div class="stat-card" style="border-color: rgba(52, 211, 153, 0.15);">
-                <span class="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Live Actions</span>
-                <div id="live-actions-count" class="text-2xl font-bold font-mono text-emerald-300 mt-1">0</div>
-                <p class="text-[10px] text-slate-400 mt-1">Direct PR writes on allowed repos</p>
-              </div>
-              <div class="stat-card" style="border-color: rgba(167, 139, 250, 0.15);">
-                <span class="text-[10px] font-bold text-violet-400 uppercase tracking-wider">Shadow Actions</span>
-                <div id="shadow-actions-count" class="text-2xl font-bold font-mono text-violet-300 mt-1">0</div>
-                <p class="text-[10px] text-slate-400 mt-1">Logged to <span id="sandbox-repo-label" class="font-mono text-slate-300">keystone-sandbox</span></p>
-              </div>
-              <div class="stat-card">
-                <span class="text-[10px] font-bold text-[#a5b4fc] uppercase tracking-wider">Safety Mode</span>
-                <div class="text-sm font-bold font-mono text-slate-200 mt-2">Zero Upstream Spam</div>
-                <p class="text-[10px] text-slate-400 mt-1">Strict sandboxing unless KEYSTONE_WRITE_REPOS</p>
-              </div>
-            </div>
-
-            <!-- Ledger filters -->
-            <div class="flex items-center justify-between pb-2 text-xs" style="border-bottom: 1px solid var(--line);">
-              <div class="flex gap-2">
-                <button id="filter-ledger-all" onclick="filterLedger('all')" class="badge badge-brand cursor-pointer">All</button>
-                <button id="filter-ledger-live" onclick="filterLedger('LIVE')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); border-color: var(--line); color: var(--text-muted);">Live</button>
-                <button id="filter-ledger-shadow" onclick="filterLedger('SHADOW')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); border-color: var(--line); color: var(--text-muted);">Shadow</button>
-              </div>
-            </div>
-
-            <div class="overflow-x-auto">
-              <table class="w-full text-left text-xs font-mono">
-                <thead class="text-slate-400 uppercase font-semibold text-[10px]" style="border-bottom: 1px solid var(--line);">
-                  <tr>
-                    <th class="py-2.5 px-3">ID</th>
-                    <th class="py-2.5 px-3">Time</th>
-                    <th class="py-2.5 px-3">Mode</th>
-                    <th class="py-2.5 px-3">Target & PR</th>
-                    <th class="py-2.5 px-3">Action</th>
-                    <th class="py-2.5 px-3">Destination</th>
-                    <th class="py-2.5 px-3">Reason</th>
-                    <th class="py-2.5 px-3 text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody id="ledger-table-body">
-                  <tr><td colspan="8" class="py-8 text-center text-slate-500 text-xs" style="font-family: Inter, sans-serif;">No actions yet. Approve actions from the Routing tab.</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Cypher Console -->
-          <div class="glass p-5 space-y-4">
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                  <span>🔧</span> OpenCypher & Algorithm Console
-                </h3>
-                <p class="text-xs text-slate-400 mt-0.5">Run live Cypher queries against FalkorDB</p>
-              </div>
-              <span class="text-[10px] text-violet-400 font-mono">OpenCypher / FalkorDB</span>
-            </div>
-
-            <div class="flex flex-wrap gap-2 text-xs">
-              <button onclick="setCypherQuery('CALL algo.betweenness({nodeLabels: [\'File\'], relationshipTypes: [\'CO_CHANGES\']}) YIELD node, score RETURN node.path, score ORDER BY score DESC LIMIT 10')"
-                      class="badge badge-brand cursor-pointer hover:opacity-80 transition">
-                ⚡ Betweenness Centrality
-              </button>
-              <button onclick="setCypherQuery('MATCH (p:Person)-[:REVIEWED]->(pr:PullRequest) WHERE p.is_bot = false RETURN p.login, count(DISTINCT pr) AS reviews ORDER BY reviews DESC LIMIT 10')"
-                      class="badge cursor-pointer hover:opacity-80 transition" style="background: rgba(255,255,255,0.04); border-color: var(--line); color: var(--text-muted);">
-                Top Human Reviewers
-              </button>
-              <button onclick="setCypherQuery('MATCH ()-[c:CO_CHANGES]->() RETURN count(c) AS co_edges, sum(c.weight) AS total_strength')"
-                      class="badge cursor-pointer hover:opacity-80 transition" style="background: rgba(255,255,255,0.04); border-color: var(--line); color: var(--text-muted);">
-                Co-Change Stats
-              </button>
-            </div>
-
-            <div class="space-y-2">
-              <textarea id="cypher-input" rows="3" class="w-full rounded-xl p-3 text-xs font-mono text-violet-200 focus:outline-none"
-                        style="background: rgba(6, 7, 14, 0.6); border: 1px solid var(--line);">CALL algo.betweenness({nodeLabels: ['File'], relationshipTypes: ['CO_CHANGES']}) YIELD node, score RETURN node.path, score ORDER BY score DESC LIMIT 10</textarea>
-              <button onclick="executeCypher()" class="btn-primary text-xs flex items-center gap-1.5">
-                <span>⚡</span> Execute Query
-              </button>
-            </div>
-
-            <div class="rounded-xl p-4 space-y-2" style="background: rgba(6, 7, 14, 0.5); border: 1px solid var(--line);">
-              <div class="flex items-center justify-between text-xs text-slate-400">
-                <span id="cypher-status">Ready</span>
-                <span id="cypher-count" class="font-mono">0 rows</span>
-              </div>
-              <div class="overflow-x-auto max-h-60">
-                <table class="w-full text-left text-xs font-mono">
-                  <tbody id="cypher-table-body">
-                    <tr><td class="text-slate-500 py-3">Run a query to see results.</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </main>
-
-  <!-- Footer -->
-  <footer class="relative z-10 text-center py-8" style="border-top: 1px solid var(--line);">
-    <div class="flex flex-col sm:flex-row items-center justify-center gap-3 text-xs text-slate-500">
-      <span class="font-bold text-slate-300">Keystone Agent</span>
-      <span>·</span>
-      <span>Built on <span class="text-violet-400 font-semibold">FalkorDB</span></span>
-      <span>·</span>
-      <span>Track 01: Agents That Act on Connected Data</span>
-      <span>·</span>
-      <a href="/mcp" class="text-indigo-400 hover:underline">FastMCP Playground</a>
-    </div>
-  </footer>
-
-  <!-- =================== PR TRIAGE BROWSER MODAL =================== -->
-  <div id="pr-triage-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
-       style="background: rgba(3, 4, 9, 0.85); backdrop-filter: blur(16px);"
-       onclick="if(event.target === this) closePrTriageModal();">
-    <div class="glass-strong w-full max-w-5xl max-h-[90vh] flex flex-col p-6 space-y-4 rounded-2xl border border-indigo-500/20 shadow-2xl overflow-hidden"
-         onclick="event.stopPropagation();">
+  <!-- =================== MAIN CONTENT CONTAINER =================== -->
+  <main style="max-width: 1400px; margin: 0 auto; padding: 24px; min-height: calc(100vh - 120px);">
+
+    <!-- ============================================================== -->
+    <!-- SECTION 1: REVIEW ROUTING (Default Landing)                    -->
+    <!-- ============================================================== -->
+    <section id="section-routing" role="tabpanel" style="display: block;">
       
-      <!-- Modal Header -->
-      <div class="flex items-center justify-between pb-3" style="border-bottom: 1px solid var(--line);">
-        <div>
-          <div class="flex items-center gap-2">
-            <h3 class="text-lg font-bold text-white flex items-center gap-2">
-              <span>📋</span> Pull Request Triage Browser
-            </h3>
-            <span id="triage-count-badge" class="badge badge-brand text-[10px] font-mono">500 PRs in Graph</span>
+      <!-- Top Overview Bar -->
+      <div class="card" style="margin-bottom: 24px; background: #FFFFFF; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; font-weight: 600;">Active Repository</span>
+            <div id="current-repo-label" style="font-size: 15px; font-weight: 700; color: #0F172A; font-family: 'JetBrains Mono', monospace;">pydantic/pydantic</div>
           </div>
-          <p class="text-xs text-slate-400 mt-1">Search, filter, and inspect all pull requests ingested from GitHub into FalkorDB</p>
+          <div style="height: 28px; width: 1px; background: var(--border);"></div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; font-weight: 600;">Graph Provenance</span>
+            <div id="provenance-badge-container">
+              <span class="badge badge-slate" id="provenance-status-label">Checking...</span>
+            </div>
+          </div>
+          <div style="height: 28px; width: 1px; background: var(--border);"></div>
+          <div>
+            <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; font-weight: 600;">Centrality Status</span>
+            <div><span class="badge badge-blue" id="centrality-status-label">Precomputed</span></div>
+          </div>
         </div>
-        <button onclick="closePrTriageModal()" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer text-base">
-          ✕
+
+        <button onclick="switchMainSection('health'); document.getElementById('ingest-repo-input').focus();" class="btn btn-secondary btn-sm">
+          <span>+ Connect New Repository</span>
         </button>
       </div>
 
-      <!-- Search & Filters Toolbar -->
-      <div class="flex items-center gap-3 flex-wrap">
-        <div class="flex-1 min-w-[240px]">
-          <input type="text" oninput="filterPrDropdown(this.value)"
-                 placeholder="Search PRs by title, #number, or author..."
-                 class="w-full rounded-xl px-3 py-2 text-xs text-indigo-200 placeholder-slate-500 font-mono focus:outline-none"
-                 style="background: rgba(6, 7, 14, 0.7); border: 1px solid var(--line);">
+      <!-- Main Layout: Left Column (PR Selection) | Right Column (Recommendations & Decision) -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px;">
+
+        <!-- LEFT COLUMN: PR Selector & Analysis -->
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          
+          <div class="card">
+            <div class="card-header">
+              <h2 style="font-size: 14px; font-weight: 700; color: #0F172A;">Pull Request Selection</h2>
+              <span id="pr-feed-status" style="font-size: 11px; color: #64748B;">Ready</span>
+            </div>
+
+            <div class="card-body" style="display: flex; flex-direction: column; gap: 14px;">
+              <!-- Searchable PR Filter Input -->
+              <div>
+                <label for="pr-search-input" style="display: block; font-size: 12px; font-weight: 500; color: #475569; margin-bottom: 4px;">
+                  Search Ingested PRs
+                </label>
+                <input type="text" id="pr-search-input" oninput="onPrSearchInput(this.value)" placeholder="Search by #number, title, or @author..." class="form-input">
+              </div>
+
+              <!-- Filter Pills -->
+              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <button id="pill-filter-all" onclick="setPrFilter('all')" class="badge badge-blue" style="cursor: pointer;">All</button>
+                <button id="pill-filter-reviewed" onclick="setPrFilter('reviewed')" class="badge badge-slate" style="cursor: pointer;">Reviewed</button>
+                <button id="pill-filter-unreviewed" onclick="setPrFilter('unreviewed')" class="badge badge-slate" style="cursor: pointer;">Unreviewed</button>
+                <button id="pill-filter-critical" onclick="setPrFilter('critical')" class="badge badge-slate" style="cursor: pointer;">High Risk</button>
+              </div>
+
+              <!-- PR Dropdown -->
+              <div>
+                <label for="pr-select-dropdown" style="display: block; font-size: 12px; font-weight: 500; color: #475569; margin-bottom: 4px;">
+                  Select Pull Request
+                </label>
+                <select id="pr-select-dropdown" onchange="onSelectPr(this.value)" class="form-select font-mono" style="font-size: 12px;">
+                  <option value="">Loading pull requests...</option>
+                </select>
+              </div>
+
+              <!-- Direct Number Input & Analyze Button -->
+              <div style="display: flex; gap: 10px; align-items: flex-end;">
+                <div style="flex: 1;">
+                  <label for="pr-direct-input" style="display: block; font-size: 12px; font-weight: 500; color: #475569; margin-bottom: 4px;">PR Number</label>
+                  <input type="number" id="pr-direct-input" value="13997" min="1" class="form-input font-mono" style="font-weight: 600;">
+                </div>
+                <button id="btn-analyze-pr" onclick="runInvestigationForInput()" class="btn btn-primary btn-lg" style="height: 38px;">
+                  <span>🔍 Analyze PR</span>
+                </button>
+              </div>
+
+              <!-- Pagination Controls for PRs -->
+              <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; color: #64748B;">
+                <button id="btn-pr-prev" onclick="changePrPage(-1)" class="btn btn-secondary btn-sm" disabled>Previous</button>
+                <span id="pr-pagination-label">Page 1</span>
+                <button id="btn-pr-next" onclick="changePrPage(1)" class="btn btn-secondary btn-sm">Next</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- PR Metadata Summary Card -->
+          <div class="card" id="pr-metadata-card">
+            <div class="card-header">
+              <h3 style="font-size: 13px; font-weight: 600; color: #0F172A;">PR Metadata</h3>
+              <span id="pr-state-badge" class="badge badge-slate">Merged</span>
+            </div>
+            <div class="card-body" style="font-size: 12px; display: flex; flex-direction: column; gap: 8px;">
+              <div style="font-weight: 600; font-size: 14px; color: #0F172A;" id="pr-summary-title">#13997: Support explicit by_alias</div>
+              <div style="color: #64748B;">Author: <span id="pr-summary-author" class="font-mono font-medium" style="color: #0F172A;">contributor</span></div>
+              <div style="display: flex; gap: 16px; margin-top: 4px; color: #475569;">
+                <div>Files changed: <strong id="pr-summary-files">0</strong></div>
+                <div>Lines added: <strong id="pr-summary-additions" style="color: #16A34A;">+0</strong></div>
+                <div>Lines deleted: <strong id="pr-summary-deletions" style="color: #DC2626;">-0</strong></div>
+              </div>
+              <div style="color: #64748B; font-size: 11px; margin-top: 2px;">Merged: <span id="pr-summary-merged">-</span></div>
+            </div>
+          </div>
+
         </div>
-        <div class="flex items-center gap-1.5 text-xs">
-          <button onclick="setPrFilterTab('all')" class="badge badge-brand cursor-pointer">All PRs</button>
-          <button onclick="setPrFilterTab('reviewed')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); color: var(--text-muted);">Reviewed</button>
-          <button onclick="setPrFilterTab('unreviewed')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); color: var(--text-muted);">Unreviewed</button>
-          <button onclick="setPrFilterTab('critical')" class="badge cursor-pointer" style="background: rgba(255,255,255,0.04); color: #fda4af;">🚨 High Risk</button>
+
+        <!-- RIGHT COLUMN: Recommended Reviewers & Decision -->
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          
+          <!-- Recommendation Focus Card -->
+          <div class="card reviewer-card primary" id="primary-reviewer-card">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+              <div>
+                <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #2563EB; letter-spacing: 0.05em;">Recommended Reviewer</span>
+                <h3 id="rec-primary-name" style="font-size: 22px; font-weight: 700; color: #0F172A; margin: 4px 0 2px 0;">@loading...</h3>
+                <p id="rec-primary-role" style="font-size: 12px; color: #64748B;">Graph-determined optimal reviewer for changed files</p>
+              </div>
+              <div class="score-badge-circle high" id="rec-primary-score-badge">
+                <span id="rec-primary-score" style="font-size: 18px;">--</span>
+                <span style="font-size: 9px; font-weight: 500; text-transform: uppercase;">Score</span>
+              </div>
+            </div>
+
+            <!-- Reviewer Metric Chips -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 18px 0; padding: 12px; background: #F8FAFC; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+              <div>
+                <span style="font-size: 11px; color: #64748B; display: block;">Shared Files</span>
+                <strong id="rec-primary-shared" style="font-size: 15px; color: #0F172A;">-</strong>
+              </div>
+              <div>
+                <span style="font-size: 11px; color: #64748B; display: block;">Recent Reviews</span>
+                <strong id="rec-primary-recent" style="font-size: 15px; color: #0F172A;">-</strong>
+              </div>
+              <div>
+                <span style="font-size: 11px; color: #64748B; display: block;">Coverage</span>
+                <strong id="rec-primary-coverage" style="font-size: 15px; color: #0F172A;">-</strong>
+              </div>
+              <div>
+                <span style="font-size: 11px; color: #64748B; display: block;">Last Activity</span>
+                <strong id="rec-primary-last" style="font-size: 13px; color: #0F172A;">-</strong>
+              </div>
+            </div>
+
+            <!-- Why this reviewer was chosen -->
+            <div style="margin-bottom: 16px;">
+              <h4 style="font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Why this reviewer was chosen:</h4>
+              <ul id="rec-primary-reasons" style="list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #334155;">
+                <li style="display: flex; align-items: flex-start; gap: 6px;">
+                  <span style="color: #16A34A; font-weight: 700;">✓</span>
+                  <span>Analyzing review history...</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Action buttons -->
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; pt-2">
+              <button onclick="switchMainSection('evidence')" class="btn btn-secondary btn-sm">
+                <span>🔍 Inspect Graph Evidence</span>
+              </button>
+              <button onclick="scrollToDispatch()" class="btn btn-primary btn-sm">
+                <span>⚡ Approve Action</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Secondary / Backup Reviewer Card -->
+          <div class="card reviewer-card secondary" id="secondary-reviewer-card">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;">
+              <div>
+                <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #4F46E5; letter-spacing: 0.05em;">Secondary / Cross-Training Reviewer</span>
+                <h4 id="rec-secondary-name" style="font-size: 17px; font-weight: 700; color: #0F172A; margin: 3px 0 2px 0;">@candidate</h4>
+                <p id="rec-secondary-desc" style="font-size: 12px; color: #64748B;">Alternative reviewer recommended for knowledge distribution</p>
+              </div>
+              <div class="score-badge-circle medium" id="rec-secondary-score-badge">
+                <span id="rec-secondary-score" style="font-size: 16px;">--</span>
+                <span style="font-size: 8px; font-weight: 500;">Score</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Knowledge Risk & Criticality Card -->
+          <div class="card">
+            <div class="card-header">
+              <h3 style="font-size: 13px; font-weight: 600; color: #0F172A;">Knowledge Risk & Blast Radius</h3>
+              <span id="risk-blast-badge" class="badge badge-slate">Standard Change</span>
+            </div>
+            <div class="card-body" style="display: flex; flex-direction: column; gap: 10px;">
+              <div id="risk-flags-container" style="display: flex; flex-direction: column; gap: 6px;">
+                <div style="font-size: 12px; color: #64748B;">No risk flags detected.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Approval Gate Card -->
+          <div class="card" id="dispatch-card">
+            <div class="card-header">
+              <h3 style="font-size: 13px; font-weight: 600; color: #0F172A;">Action Approval Gate</h3>
+              <span class="badge badge-blue">Human-in-the-Loop</span>
+            </div>
+            <div class="card-body" style="display: flex; flex-direction: column; gap: 14px;">
+              <p style="font-size: 12px; color: #475569;">
+                Review the proposed actions before execution. Select dispatch mode:
+              </p>
+
+              <!-- Mode Selection Radios -->
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                <label style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;" id="mode-label-dryrun">
+                  <input type="radio" name="dispatch-mode" value="DRY_RUN" onchange="onModeChange('DRY_RUN')">
+                  <strong style="font-size: 12px;">Dry-Run</strong>
+                  <span style="font-size: 11px; color: #64748B;">Simulate only</span>
+                </label>
+                <label style="border: 2px solid var(--accent-primary); background: #EFF6FF; border-radius: var(--radius-sm); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;" id="mode-label-shadow">
+                  <input type="radio" name="dispatch-mode" value="SHADOW" checked onchange="onModeChange('SHADOW')">
+                  <strong style="font-size: 12px; color: #1D4ED8;">Shadow</strong>
+                  <span style="font-size: 11px; color: #64748B;">Record in audit</span>
+                </label>
+                <label style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;" id="mode-label-live">
+                  <input type="radio" name="dispatch-mode" value="LIVE" onchange="onModeChange('LIVE')">
+                  <strong style="font-size: 12px;">Live GitHub</strong>
+                  <span style="font-size: 11px; color: #64748B;">Real PR review</span>
+                </label>
+              </div>
+
+              <!-- Proposed Action Details -->
+              <div id="proposed-action-summary" style="padding: 10px; background: #F8FAFC; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px;">
+                Action: <strong>Request Review</strong> from <span id="action-target-label" class="font-mono">@candidate</span>
+              </div>
+
+              <!-- Action Confirmation Checkbox (for Live) -->
+              <div id="live-confirmation-container" style="display: none; padding: 10px; background: #FFFBEB; border: 1px solid #FEF3C7; border-radius: var(--radius-sm); font-size: 12px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #B45309; font-weight: 600;">
+                  <input type="checkbox" id="live-confirm-checkbox">
+                  I confirm dispatching this live action to the authorized GitHub repository.
+                </label>
+              </div>
+
+              <button id="btn-dispatch-action" onclick="dispatchAction()" class="btn btn-primary" style="font-weight: 600;">
+                <span>Approve and Dispatch Action</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- SECTION 2: EVIDENCE                                            -->
+    <!-- ============================================================== -->
+    <section id="section-evidence" role="tabpanel" style="display: none;">
+      
+      <div style="margin-bottom: 20px;">
+        <h2 style="font-size: 20px; font-weight: 700; color: #0F172A;">Graph Reasoning & Evidence</h2>
+        <p style="font-size: 13px; color: #64748B; margin-top: 4px;">
+          Inspect the multi-hop reasoning path, direct file overlaps, and co-change bridges behind the reviewer ranking.
+        </p>
+      </div>
+
+      <!-- Human-readable Summary Card -->
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="card-body" style="padding: 18px 24px;">
+          <h3 style="font-size: 14px; font-weight: 600; color: #0F172A; margin-bottom: 6px;">Explanation Summary</h3>
+          <p id="evidence-narrative-text" style="font-size: 13px; color: #334155; line-height: 1.6;">
+            Run analysis on a PR in Section 1 to view structured graph evidence.
+          </p>
         </div>
       </div>
 
-      <!-- Triage Table -->
-      <div class="overflow-y-auto flex-1 max-h-[58vh]">
-        <table class="w-full text-left text-xs">
-          <thead class="sticky top-0 bg-[#0c0f1a] text-slate-400 uppercase font-semibold text-[10px]" style="border-bottom: 1px solid var(--line); z-index: 10;">
-            <tr>
-              <th class="py-2.5 px-3">PR #</th>
-              <th class="py-2.5 px-3">Title</th>
-              <th class="py-2.5 px-3">Author</th>
-              <th class="py-2.5 px-3">Files</th>
-              <th class="py-2.5 px-3">Architecture Risk</th>
-              <th class="py-2.5 px-3">Review Status</th>
-              <th class="py-2.5 px-3 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody id="triage-table-body" class="divide-y divide-slate-800/40">
-            <tr><td colspan="6" class="py-8 text-center text-slate-500 text-xs">Loading pull requests from graph...</td></tr>
-          </tbody>
-        </table>
+      <!-- Evidence Breakdown Cards Grid -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 24px;">
+        
+        <!-- 1. Direct File Overlap -->
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">1. Direct File Overlap</h4>
+            <span id="evidence-overlap-count" class="badge badge-slate">0 files</span>
+          </div>
+          <div class="card-body" style="padding: 12px; max-height: 220px; overflow-y: auto;">
+            <ul id="evidence-overlap-list" style="list-style: none; font-size: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <li style="color: #64748B;">No direct file overlap found.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 2. Co-Change Bridges -->
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">2. Co-Change Bridges</h4>
+            <span id="evidence-bridge-count" class="badge badge-slate">0 bridges</span>
+          </div>
+          <div class="card-body" style="padding: 12px; max-height: 220px; overflow-y: auto;">
+            <ul id="evidence-bridge-list" style="list-style: none; font-size: 12px; display: flex; flex-direction: column; gap: 6px;">
+              <li style="color: #64748B;">No co-change bridge files found.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 3. Shortest Path Traverse -->
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">3. Shortest Graph Path</h4>
+            <span id="evidence-hops-badge" class="badge badge-blue">- hops</span>
+          </div>
+          <div class="card-body" style="padding: 14px; font-size: 12px;">
+            <div id="evidence-path-chain" class="font-mono" style="color: #2563EB; word-break: break-all; line-height: 1.6;">
+              No path traversed yet.
+            </div>
+          </div>
+        </div>
+
       </div>
 
-      <!-- Modal Footer -->
-      <div class="flex items-center justify-between pt-3 text-xs text-slate-400" style="border-top: 1px solid var(--line);">
-        <span>Click <strong>Analyze</strong> to run Keystone's multi-hop reasoning on any PR</span>
-        <button onclick="closePrTriageModal()" class="btn-secondary text-xs px-4 py-1.5">Close</button>
+      <!-- Interactive Vis-Network Graph Visualization -->
+      <div class="card">
+        <div class="card-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h3 style="font-size: 14px; font-weight: 600; color: #0F172A;">Interactive Knowledge Subgraph</h3>
+            <span style="font-size: 11px; color: #64748B;">Visualizes PR files, reviewer candidates, and co-change bridges</span>
+          </div>
+
+          <!-- Controls: Zoom / Fit -->
+          <div style="display: flex; gap: 6px;">
+            <button onclick="zoomInGraph()" class="btn btn-secondary btn-sm" title="Zoom In">+</button>
+            <button onclick="zoomOutGraph()" class="btn btn-secondary btn-sm" title="Zoom Out">-</button>
+            <button onclick="fitGraph()" class="btn btn-secondary btn-sm" title="Fit to screen">Fit</button>
+            <button onclick="resetGraph()" class="btn btn-secondary btn-sm" title="Reset layout">Reset</button>
+          </div>
+        </div>
+
+        <!-- Graph Canvas Container -->
+        <div id="vis-network-container"></div>
+
+        <!-- Graph Legend -->
+        <div class="card-footer" style="display: flex; gap: 18px; font-size: 11px; flex-wrap: wrap;">
+          <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; background: #2563EB; border-radius: 2px;"></span> Pull Request</span>
+          <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; background: #D97706; border-radius: 2px;"></span> Touched File</span>
+          <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; background: #16A34A; border-radius: 2px;"></span> Recommended Reviewer</span>
+          <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; background: #4F46E5; border-radius: 2px;"></span> Co-Change Bridge</span>
+        </div>
       </div>
 
-    </div>
-  </div>
+    </section>
 
-  <div id="toast-region" aria-live="polite" aria-atomic="false"></div>
+    <!-- ============================================================== -->
+    <!-- SECTION 3: REPOSITORY HEALTH & INGESTION                       -->
+    <!-- ============================================================== -->
+    <section id="section-health" role="tabpanel" style="display: none;">
+      
+      <div style="margin-bottom: 24px;">
+        <h2 style="font-size: 20px; font-weight: 700; color: #0F172A;">Repository Health & Ingestion</h2>
+        <p style="font-size: 13px; color: #64748B; margin-top: 4px;">
+          Connect repositories, monitor ingestion status, manage graph freshness, and review audit ledgers.
+        </p>
+      </div>
+
+      <!-- 1. Dedicated Repository Connection & Ingestion Panel -->
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="card-header">
+          <h3 style="font-size: 14px; font-weight: 700; color: #0F172A;">Connect and Ingest GitHub Repository</h3>
+          <span class="badge badge-blue">Real Ingestion Engine</span>
+        </div>
+        <div class="card-body" style="display: flex; flex-direction: column; gap: 16px;">
+          <p style="font-size: 13px; color: #475569; line-height: 1.5;">
+            Connect a repository to begin. Keystone analyzes merged pull requests, changed files, and review history to recommend reviewers.
+          </p>
+
+          <!-- Ingestion Input Form -->
+          <div style="display: grid; grid-template-columns: 2fr 1fr auto; gap: 12px; align-items: flex-end;">
+            <div>
+              <label for="ingest-repo-input" style="display: block; font-size: 12px; font-weight: 500; color: #475569; margin-bottom: 4px;">
+                Repository (owner/name)
+              </label>
+              <input type="text" id="ingest-repo-input" placeholder="e.g. pydantic/pydantic or fastapi/fastapi" class="form-input font-mono">
+            </div>
+
+            <div>
+              <label for="ingest-limit-select" style="display: block; font-size: 12px; font-weight: 500; color: #475569; margin-bottom: 4px;">
+                PR Limit
+              </label>
+              <select id="ingest-limit-select" class="form-select">
+                <option value="50">50 Merged PRs</option>
+                <option value="100" selected>100 Merged PRs</option>
+                <option value="250">250 Merged PRs</option>
+                <option value="500">500 Merged PRs</option>
+              </select>
+            </div>
+
+            <button id="btn-start-ingest" onclick="startRepositoryIngestion()" class="btn btn-primary" style="height: 38px;">
+              <span>⚡ Connect & Ingest</span>
+            </button>
+          </div>
+
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #475569; cursor: pointer;">
+            <input type="checkbox" id="ingest-materialize-check" checked>
+            Compute and materialize betweenness centrality after ingestion completes
+          </label>
+
+          <!-- Live Ingestion Status Banner & Progress Bar -->
+          <div id="ingest-status-box" style="display: none; padding: 16px; background: #F8FAFC; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-top: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="ingest-status-dot" class="status-dot busy"></span>
+                <strong id="ingest-status-title" style="font-size: 13px; color: #0F172A;">Ingestion in progress...</strong>
+                <span id="ingest-job-badge" class="badge badge-slate font-mono">job-id</span>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button id="btn-cancel-ingest" onclick="cancelActiveIngestion()" class="btn btn-danger btn-sm">Cancel</button>
+                <button onclick="refreshActiveIngestion()" class="btn btn-secondary btn-sm">Refresh</button>
+              </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-bar-track" style="margin: 10px 0;">
+              <div id="ingest-progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #64748B;">
+              <div>PRs: <strong id="ingest-count-prs">0</strong> / <span id="ingest-target-prs">100</span></div>
+              <div>Files: <strong id="ingest-count-files">0</strong></div>
+              <div>Reviews: <strong id="ingest-count-reviews">0</strong></div>
+              <div>Page: <strong id="ingest-count-page">1</strong></div>
+            </div>
+
+            <div id="ingest-error-msg" style="display: none; color: #DC2626; font-size: 12px; margin-top: 8px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Registered Repositories & Graph Freshness -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 24px;">
+        
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">Registered Repositories</h4>
+            <span class="badge badge-slate" id="registered-repos-count">0</span>
+          </div>
+          <div class="card-body" style="padding: 12px; max-height: 200px; overflow-y: auto;">
+            <ul id="registered-repos-list" style="list-style: none; font-size: 12px; display: flex; flex-direction: column; gap: 8px;">
+              <li>Loading registered repositories...</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">Graph Freshness & Telemetry</h4>
+            <span class="badge badge-green">FalkorDB</span>
+          </div>
+          <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px;">
+            <div>
+              <span style="color: #64748B;">Graph Nodes:</span>
+              <div id="health-nodes-count" style="font-size: 18px; font-weight: 700; color: #0F172A;">-</div>
+            </div>
+            <div>
+              <span style="color: #64748B;">Graph Edges:</span>
+              <div id="health-edges-count" style="font-size: 18px; font-weight: 700; color: #0F172A;">-</div>
+            </div>
+            <div>
+              <span style="color: #64748B;">Ingested PRs:</span>
+              <div id="health-prs-count" style="font-size: 18px; font-weight: 700; color: #0F172A;">-</div>
+            </div>
+            <div>
+              <span style="color: #64748B;">Centrality Files:</span>
+              <div id="health-centrality-count" style="font-size: 18px; font-weight: 700; color: #0F172A;">-</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">Centrality Architecture</h4>
+            <button onclick="triggerCentralityRefresh()" class="btn btn-secondary btn-sm">Refresh</button>
+          </div>
+          <div class="card-body" style="font-size: 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div>Status: <strong id="health-centrality-status" class="badge badge-blue">Checking...</strong></div>
+            <div style="color: #64748B;">Precomputed on <strong id="health-centrality-files">0</strong> files to avoid request-time latency.</div>
+            <button onclick="triggerCentralityRefresh()" id="btn-recalc-centrality" class="btn btn-secondary btn-sm" style="margin-top: 6px;">
+              Recalculate Centrality
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 3. Critical Files & Bus Factor Monopolies -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; margin-bottom: 24px;">
+        
+        <!-- Top Critical Files -->
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">Architectural Files (Precomputed Centrality)</h4>
+          </div>
+          <div style="overflow-x: auto;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>File Path</th>
+                  <th style="text-align: right;">Centrality</th>
+                </tr>
+              </thead>
+              <tbody id="critical-files-tbody">
+                <tr><td colspan="2" style="color: #64748B;">Loading critical files...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Bus Factor Monopoly Risk -->
+        <div class="card">
+          <div class="card-header">
+            <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">Bus Factor Monopoly Files (>60% Single Reviewer)</h4>
+          </div>
+          <div style="overflow-x: auto;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>File Path</th>
+                  <th>Sole Reviewer</th>
+                  <th style="text-align: right;">Ratio</th>
+                </tr>
+              </thead>
+              <tbody id="bus-factor-tbody">
+                <tr><td colspan="3" style="color: #64748B;">Loading bus factor files...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 4. Action Audit Ledger Table (Server-side Paginated & Filtered) -->
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="card-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <h3 style="font-size: 14px; font-weight: 600; color: #0F172A;">Action Audit Ledger</h3>
+            <span style="font-size: 11px; color: #64748B;">Auditable record of simulated, shadow, and live dispatches</span>
+          </div>
+
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <select id="ledger-filter-mode" onchange="onLedgerFilterChange(this.value)" class="form-select" style="font-size: 12px; padding: 4px 10px; width: auto;">
+              <option value="all">All Modes</option>
+              <option value="SHADOW">Shadow</option>
+              <option value="LIVE">Live</option>
+              <option value="DRY_RUN">Dry-Run</option>
+              <option value="FAILED">Failed</option>
+            </select>
+            <button onclick="clearActionLedger()" class="btn btn-secondary btn-sm">Clear</button>
+          </div>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Time</th>
+                <th>PR</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Mode</th>
+                <th>Status</th>
+                <th>Notice</th>
+              </tr>
+            </thead>
+            <tbody id="action-ledger-tbody">
+              <tr><td colspan="8" style="color: #64748B; text-align: center;">No action records yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card-footer" style="display: flex; align-items: center; justify-content: space-between; font-size: 12px;">
+          <button id="btn-ledger-prev" onclick="changeLedgerPage(-1)" class="btn btn-secondary btn-sm" disabled>Previous</button>
+          <span id="ledger-pagination-label">Page 1 of 1</span>
+          <button id="btn-ledger-next" onclick="changeLedgerPage(1)" class="btn btn-secondary btn-sm" disabled>Next</button>
+        </div>
+      </div>
+
+      <!-- 5. Benchmark Results -->
+      <div class="card">
+        <div class="card-header">
+          <h4 style="font-size: 13px; font-weight: 600; color: #0F172A;">Backtest Validation vs. Relational Baselines</h4>
+          <span class="badge badge-blue">90-Day Zero-Leakage Split</span>
+        </div>
+        <div class="card-body" style="font-size: 12px;">
+          <div id="benchmark-results-container">Loading benchmark results...</div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" role="status" aria-live="polite"></div>
 
   <!-- Scripts -->
   <script src="/js/api.js"></script>

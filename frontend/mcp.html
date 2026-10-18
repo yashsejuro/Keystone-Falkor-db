@@ -5,111 +5,112 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Keystone — FastMCP Agent Tools Explorer</title>
   <meta name="description" content="Explore Keystone's graph algorithms and agent tools exposed via FastMCP for Claude Desktop, Cursor, and autonomous AI agents.">
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
 </head>
-<body class="min-h-screen flex flex-col antialiased">
-  <div class="bg-orbs"></div>
+<body>
 
   <!-- Navbar -->
-  <header class="sticky top-0 z-40" style="background: rgba(6, 7, 14, 0.85); backdrop-filter: blur(20px); border-bottom: 1px solid var(--line);">
-    <div class="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <a href="/" class="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black text-white hover:opacity-90 transition"
-           style="background: linear-gradient(135deg, #6366f1, #7c3aed); box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);">
+  <header style="background: #FFFFFF; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 50;">
+    <div style="max-width: 1400px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 36px; height: 36px; border-radius: 8px; background: #2563EB; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;">
           K
-        </a>
+        </div>
         <div>
-          <div class="flex items-center gap-2">
-            <a href="/" class="font-bold text-base text-white tracking-tight hover:text-indigo-300 transition">Keystone</a>
-            <span class="badge badge-brand text-[10px]">FastMCP Protocol</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <a href="/" style="font-size: 16px; font-weight: 700; color: #0F172A; text-decoration: none;">Keystone</a>
+            <span class="badge badge-blue">FastMCP Protocol</span>
           </div>
-          <p class="text-[11px] text-slate-400 mt-0.5">Model Context Protocol Server for Graph-Guided Agents</p>
+          <p style="font-size: 11px; color: #64748B; margin-top: 1px;">Model Context Protocol Server for Graph-Guided Agents</p>
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
-        <a href="/" class="btn-secondary text-xs px-4 py-2">
-          <span>←</span> Back to Keystone App
+      <div>
+        <a href="/" class="btn btn-secondary btn-sm">
+          <span>← Back to Review Routing</span>
         </a>
       </div>
     </div>
   </header>
 
-  <main class="max-w-[1400px] mx-auto px-6 py-10 flex-1 w-full relative z-10 space-y-10">
+  <main style="max-width: 1400px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px;">
 
-    <!-- Header info banner -->
-    <div class="glass p-8 space-y-4">
-      <div class="flex items-center gap-2">
-        <span class="badge badge-brand text-xs">⚡ FastMCP Server Architecture</span>
-        <span class="badge badge-ok text-xs">Stream Transport: /mcp/stream</span>
+    <!-- Overview Banner -->
+    <div class="card" style="padding: 24px;">
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <span class="badge badge-blue">⚡ FastMCP Server Architecture</span>
+        <span class="badge badge-green">Stream Transport: /mcp/stream</span>
       </div>
-      <h1 class="text-3xl font-extrabold text-white">
-        Graph Algorithms as <span class="gradient-text">Agent MCP Tools</span>
+      <h1 style="font-size: 24px; font-weight: 700; color: #0F172A; margin-bottom: 8px;">
+        Graph Algorithms as Agent Tools
       </h1>
-      <p class="text-slate-300 text-sm max-w-3xl leading-relaxed">
+      <p style="font-size: 13px; color: #475569; max-width: 800px; line-height: 1.6;">
         Keystone exposes its multi-hop graph algorithms as standardized <strong>Model Context Protocol (MCP)</strong> tools.
-        LLM agents (such as Claude Desktop, Cursor, or autonomous pipelines) can autonomously call shortest-path traversals,
+        LLM agents (such as Claude Desktop, Cursor, or autonomous pipelines) can call shortest-path traversals,
         betweenness centrality rankings, and reviewer affinities directly from FalkorDB.
       </p>
     </div>
 
     <!-- Client Config Guide -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div class="glass p-6 space-y-3">
-        <div class="flex items-center justify-between">
-          <h2 class="text-base font-bold text-white flex items-center gap-2">
-            <span>💻</span> Claude Desktop Setup
-          </h2>
-          <span class="text-[11px] font-mono text-slate-400">claude_desktop_config.json</span>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px;">
+      
+      <!-- Claude Desktop -->
+      <div class="card" style="padding: 20px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <h2 style="font-size: 14px; font-weight: 700; color: #0F172A;">Claude Desktop Configuration</h2>
+          <span class="badge badge-slate font-mono">claude_desktop_config.json</span>
         </div>
-        <p class="text-xs text-slate-400">Add Keystone to your Claude Desktop config to enable graph tools in chat:</p>
-        <pre class="p-4 rounded-xl text-xs font-mono text-indigo-200 overflow-x-auto" style="background: rgba(6, 7, 14, 0.7); border: 1px solid var(--line);"><code>{
+        <p style="font-size: 12px; color: #64748B; margin-bottom: 12px;">
+          Add Keystone to Claude Desktop to enable graph tools in chat:
+        </p>
+        <pre class="card" style="padding: 14px; background: #F8FAFC; font-size: 12px; overflow-x: auto; color: #1E293B;"><code>{
   "mcpServers": {
     "keystone": {
       "command": "python",
       "args": [
-        "c:\\Keystone-Falkor-db\\mcp_server.py"
+        "backend/mcp_server.py"
       ]
     }
   }
 }</code></pre>
       </div>
 
-      <div class="glass p-6 space-y-3">
-        <div class="flex items-center justify-between">
-          <h2 class="text-base font-bold text-white flex items-center gap-2">
-            <span>🖱️</span> Cursor IDE Setup
-          </h2>
-          <span class="text-[11px] font-mono text-slate-400">.cursor/mcp.json</span>
+      <!-- Cursor IDE -->
+      <div class="card" style="padding: 20px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <h2 style="font-size: 14px; font-weight: 700; color: #0F172A;">Cursor IDE Configuration</h2>
+          <span class="badge badge-slate font-mono">.cursor/mcp.json</span>
         </div>
-        <p class="text-xs text-slate-400">Configure Cursor to route agent review reasoning through Keystone:</p>
-        <pre class="p-4 rounded-xl text-xs font-mono text-indigo-200 overflow-x-auto" style="background: rgba(6, 7, 14, 0.7); border: 1px solid var(--line);"><code>{
+        <p style="font-size: 12px; color: #64748B; margin-bottom: 12px;">
+          Route Cursor's coding agent reasoning through Keystone graph tools:
+        </p>
+        <pre class="card" style="padding: 14px; background: #F8FAFC; font-size: 12px; overflow-x: auto; color: #1E293B;"><code>{
   "mcpServers": {
     "keystone": {
       "command": "python",
-      "args": ["backend/mcp_server.py"]
+      "args": [
+        "backend/mcp_server.py"
+      ]
     }
   }
 }</code></pre>
       </div>
+
     </div>
 
-    <!-- Live Interactive Tool Playground -->
-    <div class="glass p-8 space-y-6">
-      <div class="flex items-center justify-between flex-wrap gap-4">
+    <!-- Interactive MCP Tools Playground -->
+    <div class="card" style="padding: 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px;">
         <div>
-          <h2 class="text-xl font-bold text-white flex items-center gap-2">
-            <span>🧪</span> Live MCP Tool Playground
-          </h2>
-          <p class="text-xs text-slate-400 mt-1">Test each graph algorithm tool interactively through the REST execution bridge</p>
+          <h2 style="font-size: 16px; font-weight: 700; color: #0F172A;">Interactive FastMCP Tool Playground</h2>
+          <p style="font-size: 12px; color: #64748B; margin-top: 2px;">Test each graph algorithm tool interactively through the REST execution bridge</p>
         </div>
-        <div class="flex items-center gap-2 text-xs">
-          <span class="text-slate-400 font-medium">Repository:</span>
-          <select id="playground-repo" class="font-mono text-indigo-300 font-bold bg-transparent border border-slate-700 px-3 py-1.5 rounded-xl cursor-pointer">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px;">
+          <label for="mcp-repo-select" style="color: #64748B; font-weight: 500;">Repository:</label>
+          <select id="mcp-repo-select" class="form-select font-mono" style="width: auto; padding: 4px 10px; font-weight: 600;">
             <option value="pydantic">pydantic</option>
             <option value="fastapi">fastapi</option>
           </select>
@@ -117,72 +118,68 @@
       </div>
 
       <!-- Tools Grid -->
-      <div id="tools-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+      <div id="mcp-tools-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 20px;">
+        <div style="color: #64748B;">Loading FastMCP tools...</div>
+      </div>
 
-      <!-- Results Terminal -->
-      <div class="space-y-2">
-        <div class="flex items-center justify-between text-xs text-slate-400">
-          <span class="font-mono font-semibold text-indigo-300" id="tool-result-title">Execution Output</span>
-          <span class="font-mono" id="tool-result-status">Idle</span>
+      <!-- Execution Terminal / Output -->
+      <div class="card" style="background: #0F172A; border-color: #1E293B;">
+        <div style="padding: 10px 16px; border-bottom: 1px solid #1E293B; display: flex; align-items: center; justify-content: space-between; color: #94A3B8; font-size: 11px;">
+          <span id="mcp-output-title" class="font-mono">Tool Output</span>
+          <span id="mcp-output-status">Idle</span>
         </div>
-        <pre id="tool-output" class="p-5 rounded-xl text-xs font-mono text-slate-300 overflow-x-auto max-h-96"
-             style="background: rgba(6, 7, 14, 0.85); border: 1px solid var(--line);">Select a tool above to run an interactive query against FalkorDB.</pre>
+        <pre id="mcp-output-content" class="font-mono" style="padding: 16px; color: #E2E8F0; font-size: 12px; max-height: 280px; overflow-y: auto; white-space: pre-wrap;">Select a tool above to test real execution against FalkorDB.</pre>
       </div>
     </div>
 
   </main>
 
-  <footer class="text-center py-6 text-xs text-slate-500 relative z-10" style="border-top: 1px solid var(--line);">
-    Keystone FastMCP Architecture · Built on FalkorDB · Track 01 Hackathon
-  </footer>
-
   <script src="/js/api.js"></script>
   <script>
-    async function loadPlayground() {
+    async function loadMCPPlayground() {
       try {
         const data = await KeystoneAPI.getMCPTools();
-        const container = document.getElementById('tools-container');
+        const container = document.getElementById('mcp-tools-container');
         container.innerHTML = data.tools.map(t => `
-          <div class="stat-card space-y-3 flex flex-col justify-between">
+          <div class="card" style="padding: 16px; display: flex; flex-direction: column; justify-content: space-between; gap: 12px;">
             <div>
-              <div class="flex items-center justify-between">
-                <span class="font-mono font-bold text-indigo-400 text-sm">${t.name}</span>
-                <span class="badge badge-brand text-[9px]">TOOL</span>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                <span class="font-mono" style="font-weight: 700; color: #2563EB; font-size: 13px;">${t.name}</span>
+                <span class="badge badge-slate" style="font-size: 9px;">TOOL</span>
               </div>
-              <p class="text-xs text-slate-400 mt-2 leading-relaxed">${t.description}</p>
+              <p style="font-size: 12px; color: #475569; line-height: 1.4;">${t.description}</p>
             </div>
-            <button onclick="runTool('${t.name}', ${JSON.stringify(t.example).replace(/"/g, '&quot;')})"
-                    class="btn-primary text-xs py-2 w-full mt-3">
-              ⚡ Test ${t.name}()
+            <button onclick="runPlaygroundTool('${t.name}', ${JSON.stringify(t.example).replace(/"/g, '&quot;')})" class="btn btn-secondary btn-sm" style="width: 100%;">
+              Execute Test Query ➔
             </button>
           </div>
         `).join('');
       } catch (err) {
-        console.error(err);
+        document.getElementById('mcp-tools-container').innerHTML = '<div style="color: #DC2626;">Failed to load MCP tools.</div>';
       }
     }
 
-    async function runTool(toolName, params) {
-      const repo = document.getElementById('playground-repo').value;
-      const titleEl = document.getElementById('tool-result-title');
-      const statusEl = document.getElementById('tool-result-status');
-      const outputEl = document.getElementById('tool-output');
+    async function runPlaygroundTool(toolName, params) {
+      const repo = document.getElementById('mcp-repo-select').value;
+      const titleEl = document.getElementById('mcp-output-title');
+      const statusEl = document.getElementById('mcp-output-status');
+      const contentEl = document.getElementById('mcp-output-content');
 
-      titleEl.innerText = `${toolName}(${JSON.stringify({ ...params, repo })})`;
-      statusEl.innerText = "Executing on FalkorDB...";
-      outputEl.innerText = "Querying graph algorithms...";
+      titleEl.innerText = `${toolName}(repo="${repo}")`;
+      statusEl.innerText = "Executing...";
+      contentEl.innerText = "Querying FalkorDB...";
 
       try {
-        const res = await KeystoneAPI.executeMCPTool(toolName, params, repo);
+        const result = await KeystoneAPI.executeMCPTool(toolName, params, repo);
         statusEl.innerText = "Success (200 OK)";
-        outputEl.innerText = JSON.stringify(res, null, 2);
+        contentEl.innerText = JSON.stringify(result, null, 2);
       } catch (err) {
         statusEl.innerText = "Error";
-        outputEl.innerText = err.message;
+        contentEl.innerText = err.message || "Execution failed";
       }
     }
 
-    window.onload = loadPlayground;
+    document.addEventListener('DOMContentLoaded', loadMCPPlayground);
   </script>
 </body>
 </html>

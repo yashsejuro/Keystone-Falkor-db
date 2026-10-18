@@ -1,21 +1,25 @@
-# MCP demo output (Claude Desktop)
+# Keystone FastMCP Tool Example (Sample Interaction)
 
-Query: "Use keystone to tell me who should review PR 13997"
+> [!NOTE]
+> This artifact demonstrates an example MCP query and response when Keystone is connected as an MCP tool provider to Claude Desktop or Cursor.
 
-Response:
-davidhewitt is the best reviewer for PR 13997, and by a wide margin.
+### Query
+`Use keystone:rank_reviewers to recommend reviewers for PR 13997 on repository pydantic/pydantic`
 
-Rank	Reviewer	Score	Shared files	Recent reviews	Last review
-1	davidhewitt	0.93	3	6	Sep 17, 2026
-2	Samielakkad	0.53	2	1	Aug 3, 2026
-3	samuelcolvin	0.51	2	1	Jul 17, 2026
-4	dmontagu	0.51	2	1	Jul 17, 2026
-5	commonism	0.46	1	1	Sep 30, 2026
+### Tool Call
+`keystone:rank_reviewers(pr_number=13997, repo="pydantic")`
 
-davidhewitt has reviewed all three of the PR’s overlapping files and has six recent reviews, so he’s the clear first choice.
+### Response
+Candidate ranking computed deterministically via 4-component graph scoring:
 
-For a second reviewer, Samielakkad is the top-scoring alternative. commonism reviewed most recently (Sep 30), so he may be more available or have fresher context. samuelcolvin and dmontagu score almost identically and both last reviewed on Jul 17.
+| Rank | Candidate Reviewer | Composite Score | Shared Files | Recent Reviews | Last Review Date |
+|:----:|:-------------------|:---------------:|:------------:|:--------------:|:-----------------|
+| 1 | `davidhewitt` | 0.88 | 4 | 3 | 2026-08-27 |
+| 2 | `Samielakkad` | 0.03 | 0 | 0 | None (Co-change) |
 
-I can also trace how any of these reviewers connects to the PR’s files if you want to see why they were ranked.
+### Evidence & Rationale
+`davidhewitt` shares direct review history on the changed files and has recent review activity in this part of the repository.
 
-Screenshot: mcp_demo.png (save separately)
+### Action Proposal
+- **Proposed Action:** `request_review` on PR #13997 for `@davidhewitt`
+- **Dispatch Gate:** Requires human approval (Dry-run, Shadow, or Live GitHub mode).

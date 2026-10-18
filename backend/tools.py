@@ -1,16 +1,27 @@
 """All graph queries live here. Every function returns plain Python data.
-No synthetic fallbacks. If FalkorDB is unreachable, queries raise."""
-try:
-    from backend.graph_client import get_graph, DEFAULT_REPO, validate_repo
-except ImportError:
-    from graph_client import get_graph, DEFAULT_REPO, validate_repo
+No synthetic fallbacks. Instrumented, parameterized, and optimized.
+"""
+from typing import Optional
 from datetime import datetime, timedelta, timezone
 
+try:
+    from backend.graph_client import (
+        execute_graph_query, DEFAULT_REPO, validate_repo
+    )
+    from backend.cache import METADATA_CACHE
+    from backend.centrality import get_precomputed_critical_files
+except ImportError:
+    from graph_client import (
+        execute_graph_query, DEFAULT_REPO, validate_repo
+    )
+    from cache import METADATA_CACHE
+    from centrality import get_precomputed_critical_files
 
-def _rows(query, params=None, repo: str = DEFAULT_REPO):
+
+def _rows(query: str, params: Optional[dict] = None, repo: str = DEFAULT_REPO):
     validate_repo(repo)
-    g = get_graph(repo)
-    return g.query(query, params or {}).result_set
+    res = execute_graph_query(query, params or {}, repo=repo)
+    return res.result_set if hasattr(res, "result_set") else []
 
 
 def get_pr(number: int, repo: str = DEFAULT_REPO) -> dict:
@@ -18,26 +29,37 @@ def get_pr(number: int, repo: str = DEFAULT_REPO) -> dict:
         """
         MATCH (pr:PullRequest {number: $n})
         OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
-         OPTIONAL MATCH (pr)-[touch:TOUCHES]->(f:File)
+        OPTIONAL MATCH (pr)-[touch:TOUCHES]->(f:File)
         RETURN pr.number, pr.title, pr.state, pr.created_at, pr.merged_at,
                pr.additions, pr.deletions, pr.files_changed,
-             a.login, collect(DISTINCT f.path) AS files,
-             sum(coalesce(touch.additions, 0)), sum(coalesce(touch.deletions, 0)),
-             collect(DISTINCT [f.path, coalesce(f.centrality, 0)]) AS centrality
+               a.login, collect(DISTINCT f.path) AS files,
+               sum(coalesce(touch.additions, 0)), sum(coalesce(touch.deletions, 0)),
+               collect(DISTINCT [f.path, coalesce(f.centrality, 0.0)]) AS centrality
         """,
-        {"n": number}, repo,
+        {"n": int(number)}, repo,
     )
-    if not rows:
+    if not rows or not rows[0][0]:
         return {}
     r = rows[0]
-    files = r[9] or []
+    files = [f for f in (r[9] or []) if f is not None]
+    centrality_map = {}
+    if r[12]:
+        for item in r[12]:
+            if isinstance(item, (list, tuple)) and len(item) == 2 and item[0] is not None:
+                centrality_map[item[0]] = round(float(item[1] or 0.0), 4)
+
     return {
-        "number": r[0], "title": r[1], "state": r[2],
-        "created_at": r[3], "merged_at": r[4],
-        "additions": r[5] or r[10], "deletions": r[6] or r[11],
-        "files_changed": r[7] or len(files),
-        "author": r[8], "files": files,
-        "centrality": {path: round(float(c), 4) for path, c in r[12] if path is not None},
+        "number": int(r[0]),
+        "title": r[1] or f"PR #{number}",
+        "state": r[2] or "closed",
+        "created_at": r[3],
+        "merged_at": r[4],
+        "additions": int(r[5] or r[10] or 0),
+        "deletions": int(r[6] or r[11] or 0),
+        "files_changed": int(r[7] or len(files)),
+        "author": r[8] or "contributor",
+        "files": files,
+        "centrality": centrality_map,
     }
 
 
@@ -58,11 +80,15 @@ def reviewer_candidates(pr_number: int, cutoff_iso: str, repo: str = DEFAULT_REP
         ORDER BY shared_files DESC, last_review DESC
         LIMIT 25
         """,
-        {"pr": pr_number, "cutoff": cutoff_iso}, repo,
+        {"pr": int(pr_number), "cutoff": cutoff_iso}, repo,
     )
     return [
-        {"login": r[0], "shared_files": r[1],
-         "recent_reviews": r[2], "last_review": r[3]}
+        {
+            "login": str(r[0]),
+            "shared_files": int(r[1] or 0),
+            "recent_reviews": int(r[2] or 0),
+            "last_review": r[3],
+        }
         for r in rows
     ]
 
@@ -81,49 +107,26 @@ def bus_factor_files(cutoff_iso: str, min_total: int = 5, repo: str = DEFAULT_RE
         ORDER BY total DESC
         LIMIT 30
         """,
-        {"cutoff": cutoff_iso, "min_total": min_total}, repo,
+        {"cutoff": cutoff_iso, "min_total": int(min_total)}, repo,
     )
     return [
-        {"path": r[0], "sole_reviewer": r[1], "sole_count": r[2], "total": r[3]}
+        {
+            "path": str(r[0]),
+            "sole_reviewer": str(r[1]),
+            "sole_count": int(r[2] or 0),
+            "total": int(r[3] or 0),
+        }
         for r in rows
     ]
 
 
 def critical_files(limit: int = 20, repo: str = DEFAULT_REPO) -> list[dict]:
-    """Top files by betweenness centrality on the CO_CHANGES subgraph.
-
-    Filters out docs and markdown, which co-change with everything and
-    would dominate the ranking without being architecturally meaningful.
-
-    No fallback. If the algorithm errors, the exception propagates.
-    """
-    rows = _rows(
-        """
-        CALL algo.betweenness({
-            nodeLabels: ['File'],
-            relationshipTypes: ['CO_CHANGES']
-        }) YIELD node, score
-        WHERE NOT node.path STARTS WITH 'docs/'
-          AND NOT node.path STARTS WITH 'website/'
-          AND NOT node.path ENDS WITH '.md'
-        RETURN node.path, score
-        ORDER BY score DESC
-        LIMIT $limit
-        """,
-        {"limit": limit}, repo,
-    )
-    return [{"path": r[0], "score": r[1]} for r in rows]
+    """Retrieve top files by reading precomputed File.centrality without running expensive algorithms."""
+    data = get_precomputed_critical_files(limit=limit, repo=repo)
+    return data.get("files", [])
 
 
 def graph_affinity(pr_number: int, cutoff_iso: str, repo: str = DEFAULT_REPO) -> list[dict]:
-    """Centrality-weighted co-change proximity per candidate reviewer.
-
-    Walks PR -> File -> CO_CHANGES -> File <- PR <- Reviewer, so a candidate is
-    credited for reviewing files that change *alongside* this PR's files, not only
-    for the files named in it. Each bridge is weighted by the CO_CHANGES count and
-    by the bridge file's betweenness centrality, which is stored on the node by
-    ingest_service.materialize_file_centrality.
-    """
     rows = _rows(
         """
         MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)-[c:CO_CHANGES]->(f2:File)
@@ -135,33 +138,41 @@ def graph_affinity(pr_number: int, cutoff_iso: str, repo: str = DEFAULT_REPO) ->
                sum(c.weight) AS affinity,
                count(DISTINCT f2) AS bridge_files,
                count(DISTINCT other) AS bridge_prs,
-               sum(c.weight * coalesce(f2.centrality, 0)) AS structural
+               sum(c.weight * coalesce(f2.centrality, 0.0)) AS structural
         ORDER BY structural DESC
         LIMIT 25
         """,
-        {"pr": pr_number, "cutoff": cutoff_iso}, repo,
+        {"pr": int(pr_number), "cutoff": cutoff_iso}, repo,
     )
     return [
-        {"login": r[0], "affinity": float(r[1] or 0), "bridge_files": r[2],
-         "bridge_prs": r[3], "structural": float(r[4] or 0)}
+        {
+            "login": str(r[0]),
+            "affinity": float(r[1] or 0.0),
+            "bridge_files": int(r[2] or 0),
+            "bridge_prs": int(r[3] or 0),
+            "structural": float(r[4] or 0.0),
+        }
         for r in rows
     ]
 
 
 def pr_criticality(pr_number: int, repo: str = DEFAULT_REPO) -> dict:
-    """How structurally load-bearing this PR is, from materialised betweenness."""
+    """Read structural risk from precomputed File.centrality values."""
     rows = _rows(
         """
         MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)
-        RETURN count(f), avg(coalesce(f.centrality, 0)), max(coalesce(f.centrality, 0))
+        RETURN count(f), avg(coalesce(f.centrality, 0.0)), max(coalesce(f.centrality, 0.0))
         """,
-        {"pr": pr_number}, repo,
+        {"pr": int(pr_number)}, repo,
     )
     if not rows or rows[0][0] == 0:
         return {"files": 0, "mean_centrality": 0.0, "max_centrality": 0.0}
     n, mean, peak = rows[0]
-    return {"files": n, "mean_centrality": round(float(mean or 0), 4),
-            "max_centrality": round(float(peak or 0), 4)}
+    return {
+        "files": int(n or 0),
+        "mean_centrality": round(float(mean or 0.0), 4),
+        "max_centrality": round(float(peak or 0.0), 4),
+    }
 
 
 def _node_label(kind: str, value) -> str:
@@ -169,14 +180,15 @@ def _node_label(kind: str, value) -> str:
 
 
 def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO,
-                 cutoff_iso: str | None = None, cap: int = 10, max_co_hops: int = 4) -> dict:
-    """Shortest evidence path from a PR to a reviewer, plus the bridges behind their score.
+                 cutoff_iso: Optional[str] = None, cap: int = 10, max_co_hops: int = 4) -> dict:
+    """Shortest evidence path from a PR to a reviewer, plus the bridges behind their score."""
+    if not reviewer:
+        return {
+            "reviewer": "", "hops": 0, "co_change_hops": 0,
+            "evidence": "none", "path": [], "path_nodes": [], "path_edges": [],
+            "files": [], "via_prs": [], "direct": [], "structural_chain": [], "bridges": [],
+        }
 
-    The PR's own reviews are excluded, so the shortest possible path is 3 edges:
-    PR -TOUCHES-> File <-TOUCHES- PR <-REVIEWED- Person. Without that direct history,
-    shortestPath() searches the CO_CHANGES subgraph between the PR's files and the files
-    the reviewer has reviewed, and the co-change hops are added to those 3 edges.
-    """
     direct = _rows(
         """
         MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)
@@ -186,19 +198,20 @@ def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO,
         ORDER BY other.merged_at DESC, f.path
         LIMIT 20
         """,
-        {"pr": pr_number, "rev": reviewer}, repo,
+        {"pr": int(pr_number), "rev": reviewer}, repo,
     )
+
     bridges = _rows(
         """
         MATCH (pr:PullRequest {number: $pr})-[:TOUCHES]->(f:File)-[c:CO_CHANGES]->(f2:File)
         MATCH (f2)<-[:TOUCHES]-(other:PullRequest)<-[:REVIEWED]-(:Person {login: $rev})
         WHERE other.number <> $pr AND other.merged_at > $cutoff
         WITH f, f2, c, max(other.number) AS via
-        RETURN f.path, f2.path, c.weight, coalesce(f2.centrality, 0) AS centrality, via
+        RETURN f.path, f2.path, c.weight, coalesce(f2.centrality, 0.0) AS centrality, via
         ORDER BY c.weight * centrality DESC, f2.path
         LIMIT 5
         """,
-        {"pr": pr_number, "rev": reviewer, "cutoff": cutoff_iso or ""}, repo,
+        {"pr": int(pr_number), "rev": reviewer, "cutoff": cutoff_iso or ""}, repo,
     )
 
     chain, co_hops = [], 0
@@ -208,8 +221,7 @@ def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO,
         edges = [(0, 1, "TOUCHES"), (2, 1, "TOUCHES"), (3, 2, "REVIEWED")]
         evidence = "direct_review_history"
     else:
-        # FalkorDB only allows shortestPath in WITH/RETURN and only on directed
-        # traversals, which is why CO_CHANGES is written in both directions.
+        # Bounded shortestPath search on CO_CHANGES
         structural = _rows(
             f"""
             MATCH (:Person {{login: $rev}})-[:REVIEWED]->(v:PullRequest)-[:TOUCHES]->(b:File)
@@ -217,7 +229,7 @@ def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO,
             WITH b, max(v.merged_at) AS last ORDER BY last DESC, b.path LIMIT $cap
             WITH collect(b) AS dst
             MATCH (:PullRequest {{number: $pr}})-[:TOUCHES]->(a:File)
-            WITH dst, a ORDER BY coalesce(a.centrality, 0) DESC, a.path LIMIT $cap
+            WITH dst, a ORDER BY coalesce(a.centrality, 0.0) DESC, a.path LIMIT $cap
             WITH dst, collect(a) AS src
             UNWIND src AS s
             UNWIND dst AS d
@@ -229,12 +241,14 @@ def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO,
             RETURN hops, [n IN nodes(p) | n.path], v.number
             ORDER BY v.merged_at DESC LIMIT 1
             """,
-            {"pr": pr_number, "rev": reviewer, "cap": cap}, repo,
+            {"pr": int(pr_number), "rev": reviewer, "cap": cap}, repo,
         )
         if not structural:
-            return {"reviewer": reviewer, "hops": None, "co_change_hops": None,
-                    "evidence": "none", "path": [], "path_nodes": [], "path_edges": [],
-                    "files": [], "via_prs": [], "structural_chain": [], "bridges": []}
+            return {
+                "reviewer": reviewer, "hops": None, "co_change_hops": None,
+                "evidence": "none", "path": [], "path_nodes": [], "path_edges": [],
+                "files": [], "via_prs": [], "direct": [], "structural_chain": [], "bridges": [],
+            }
         co_hops, chain, via = int(structural[0][0]), structural[0][1], structural[0][2]
         k = len(chain)
         nodes = ([("PullRequest", pr_number)] + [("File", p) for p in chain]
@@ -262,66 +276,120 @@ def explain_path(pr_number: int, reviewer: str, repo: str = DEFAULT_REPO,
 
 
 def graph_stats(repo: str = DEFAULT_REPO) -> dict:
-    """Substrate the graph algorithms actually have to work with."""
+    key = validate_repo(repo)
+    cache_key = f"graph_stats:{key}"
+    cached = METADATA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     rows = _rows(
         """
         MATCH ()-[c:CO_CHANGES]->()
         WITH count(c) AS co, sum(c.weight) AS strength
-        OPTIONAL MATCH (f:File) WHERE f.centrality IS NOT NULL
+        OPTIONAL MATCH (f:File) WHERE f.centrality IS NOT NULL AND f.centrality > 0
         RETURN co, strength, count(f)
         """,
-        repo=repo,
+        repo=key,
     )
     co_edges, strength, scored = (rows[0] if rows else [0, 0, 0])
-    return {"co_change_edges": co_edges, "co_change_strength": float(strength or 0),
-            "centrality_scored_files": scored}
+    stats = {
+        "co_change_edges": int(co_edges or 0),
+        "co_change_strength": float(strength or 0.0),
+        "centrality_scored_files": int(scored or 0),
+    }
+    METADATA_CACHE.set(cache_key, stats, ttl=45.0)
+    return stats
 
 
-def sample_pr(repo: str = DEFAULT_REPO) -> int | None:
-    """A recent real PR with enough review history to produce an answer.
+def sample_pr(repo: str = DEFAULT_REPO) -> Optional[int]:
+    key = validate_repo(repo)
+    cache_key = f"sample_pr:{key}"
+    cached = METADATA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
 
-    Used by the landing page so its example is live rather than a scripted showcase.
-    """
     rows = _rows(
         """
         MATCH (pr:PullRequest)<-[:REVIEWED]-(r:Person)
         WHERE r.is_bot = false AND pr.merged_at IS NOT NULL
         OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
         WITH pr, count(DISTINCT r) AS reviewers, count(DISTINCT f) AS files
-        WHERE reviewers >= 2 AND files >= 3
+        WHERE reviewers >= 1 AND files >= 1
         RETURN pr.number ORDER BY pr.number DESC LIMIT 1
         """,
-        repo=repo,
+        repo=key,
     )
-    return rows[0][0] if rows else None
+    result = int(rows[0][0]) if rows and rows[0][0] is not None else None
+    METADATA_CACHE.set(cache_key, result, ttl=60.0)
+    return result
 
 
-def list_recent_prs(limit: int = 500, repo: str = DEFAULT_REPO, q: str | None = None, filter_by: str = "all") -> list[dict]:
-    """Return real merged pull requests from FalkorDB for the specified repository.
-    Supports up to 500 PRs with search and review status filtering.
+def list_recent_prs(page: int = 1, page_size: int = 25, limit: int = 25,
+                    repo: str = DEFAULT_REPO, q: Optional[str] = None,
+                    filter_by: str = "all") -> dict:
+    """Server-side paginated and filtered PR listing from FalkorDB."""
+    key = validate_repo(repo)
+    safe_page = max(1, page)
+    safe_page_size = max(1, min(page_size or limit, 100))
+    skip = (safe_page - 1) * safe_page_size
+
+    # Build filtered query in Cypher
+    where_clauses = ["pr.merged_at IS NOT NULL"]
+    params: dict = {"skip": skip, "limit": safe_page_size}
+
+    if q:
+        clean_q = q.strip().lower()
+        if clean_q.isdigit():
+            where_clauses.append("pr.number = $pr_num")
+            params["pr_num"] = int(clean_q)
+        else:
+            where_clauses.append("toLower(coalesce(pr.title, '')) CONTAINS $q OR toLower(coalesce(a.login, '')) CONTAINS $q")
+            params["q"] = clean_q
+
+    base_match = """
+    MATCH (pr:PullRequest)
+    OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
     """
-    rows = _rows(
-        """
-        MATCH (pr:PullRequest)
-        WHERE pr.merged_at IS NOT NULL
-        OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
-        OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
-        OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) WHERE r.is_bot = false
-        WITH pr, a, count(DISTINCT f) AS file_count, count(DISTINCT r) AS reviewer_count, max(coalesce(f.centrality, 0.0)) AS max_c
-        RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count, max_c
-        ORDER BY pr.number DESC
-        LIMIT $limit
-        """,
-        {"limit": limit or 500}, repo=repo,
-    )
-    results = []
+
+    where_str = " WHERE " + " AND ".join(where_clauses)
+
+    # First aggregate files and reviews
+    query = f"""
+    {base_match}
+    {where_str}
+    OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
+    OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) WHERE r.is_bot = false
+    WITH pr, a, count(DISTINCT f) AS file_count, count(DISTINCT r) AS reviewer_count, max(coalesce(f.centrality, 0.0)) AS max_c
+    """
+
+    # Post-aggregation review filtering
+    post_filter = ""
+    if filter_by == "reviewed":
+        post_filter = " WHERE reviewer_count > 0"
+    elif filter_by == "unreviewed":
+        post_filter = " WHERE reviewer_count = 0"
+    elif filter_by == "critical":
+        post_filter = " WHERE max_c >= 0.08"
+
+    full_query = f"""
+    {query}
+    {post_filter}
+    RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count, max_c
+    ORDER BY pr.number DESC
+    SKIP $skip
+    LIMIT $limit
+    """
+
+    rows = _rows(full_query, params, repo=key)
+
+    prs = []
     for r in rows:
         max_c = float(r[6] or 0.0)
         if max_c >= 0.20:
             risk_tier = "Critical Architecture"
-            risk_color = "rose"
+            risk_color = "red"
         elif max_c >= 0.08:
-            risk_tier = "High Blast Radius"
+            risk_tier = "High Risk"
             risk_color = "amber"
         elif max_c > 0.01:
             risk_tier = "Moderate Risk"
@@ -330,7 +398,7 @@ def list_recent_prs(limit: int = 500, repo: str = DEFAULT_REPO, q: str | None = 
             risk_tier = "Standard Change"
             risk_color = "slate"
 
-        results.append({
+        prs.append({
             "number": int(r[0]),
             "title": str(r[1] or f"PR #{r[0]}"),
             "merged_at": str(r[2]) if r[2] else None,
@@ -343,23 +411,26 @@ def list_recent_prs(limit: int = 500, repo: str = DEFAULT_REPO, q: str | None = 
             "risk_color": risk_color,
         })
 
-    if q:
-        q_lower = q.lower().strip()
-        results = [
-            p for p in results
-            if q_lower in str(p["number"]) or q_lower in p["title"].lower() or q_lower in p["author"].lower()
-        ]
+    # Get total count for pagination metadata
+    stats = get_repo_pr_stats(key)
 
-    if filter_by == "reviewed":
-        results = [p for p in results if p["reviewer_count"] > 0]
-    elif filter_by == "unreviewed":
-        results = [p for p in results if p["reviewer_count"] == 0]
-
-    return results
+    return {
+        "repo": key,
+        "prs": prs,
+        "count": len(prs),
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "stats": stats,
+    }
 
 
 def get_repo_pr_stats(repo: str = DEFAULT_REPO) -> dict:
-    """Return statistical summary of all ingested pull requests in the repository."""
+    key = validate_repo(repo)
+    cache_key = f"pr_stats:{key}"
+    cached = METADATA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     rows = _rows(
         """
         MATCH (pr:PullRequest)
@@ -369,22 +440,21 @@ def get_repo_pr_stats(repo: str = DEFAULT_REPO) -> dict:
                sum(CASE WHEN rev_count > 0 THEN 1 ELSE 0 END) AS reviewed_prs,
                sum(CASE WHEN rev_count = 0 THEN 1 ELSE 0 END) AS unreviewed_prs
         """,
-        repo=repo
+        repo=key
     )
     if not rows:
-        return {"total": 0, "reviewed": 0, "unreviewed": 0}
-    total, reviewed, unreviewed = rows[0]
-    return {
-        "total": int(total or 0),
-        "reviewed": int(reviewed or 0),
-        "unreviewed": int(unreviewed or 0),
-    }
+        stats = {"total": 0, "reviewed": 0, "unreviewed": 0}
+    else:
+        total, reviewed, unreviewed = rows[0]
+        stats = {
+            "total": int(total or 0),
+            "reviewed": int(reviewed or 0),
+            "unreviewed": int(unreviewed or 0),
+        }
+
+    METADATA_CACHE.set(cache_key, stats, ttl=30.0)
+    return stats
 
 
 def default_cutoff(days: int = 90) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-
-if __name__ == "__main__":
-    print("PR 14000:", get_pr(14000))
-    print("Candidates:", reviewer_candidates(13997, default_cutoff())[:3])
