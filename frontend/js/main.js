@@ -353,22 +353,50 @@ async function fetchRegisteredRepositories() {
       if (repos.length === 0) {
         listEl.innerHTML = '<li style="color: #64748B;">No repositories registered.</li>';
       } else {
-        listEl.innerHTML = repos.map(r => `
-          <li style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
-            <div>
-              <strong style="color: #0F172A;">${escapeHtml(r.slug)}</strong>
-              <div style="font-size: 11px; color: #64748B; font-family: monospace;">${escapeHtml(r.graph_name)}</div>
-            </div>
-            <div style="text-align: right;">
-              <span class="badge ${r.status === 'ready' ? 'badge-green' : 'badge-slate'}">${escapeHtml(r.status)}</span>
-              <div style="font-size: 10px; color: #64748B; margin-top: 2px;">${Number(r.nodes).toLocaleString()} nodes</div>
-            </div>
-          </li>
-        `).join('');
+        listEl.innerHTML = repos.map(r => {
+          const isCore = ['pydantic', 'fastapi'].includes(r.key);
+          const deleteBtn = isCore ? '' : `
+            <button onclick="removeRepository('${escapeHtml(r.key)}', '${escapeHtml(r.slug)}')" class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 11px; margin-left: 6px; color: #DC2626;" title="Unregister repo and free graph">
+              🗑️ Delete
+            </button>
+          `;
+          return `
+            <li style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-subtle);">
+              <div>
+                <strong style="color: #0F172A;">${escapeHtml(r.slug)}</strong>
+                <div style="font-size: 11px; color: #64748B; font-family: monospace;">${escapeHtml(r.graph_name)}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <div style="text-align: right;">
+                  <span class="badge ${r.status === 'ready' ? 'badge-green' : 'badge-slate'}">${escapeHtml(r.status)}</span>
+                  <div style="font-size: 10px; color: #64748B; margin-top: 2px;">${Number(r.nodes).toLocaleString()} nodes</div>
+                </div>
+                ${deleteBtn}
+              </div>
+            </li>
+          `;
+        }).join('');
       }
     }
   } catch (err) {
     console.error("Failed to load registered repositories:", err);
+  }
+}
+
+async function removeRepository(repoKey, repoSlug) {
+  if (!confirm(`Are you sure you want to unregister '${repoSlug}' and delete its graph data from FalkorDB?`)) {
+    return;
+  }
+  try {
+    await KeystoneAPI.deleteRepository(repoKey, true);
+    notify(`Repository '${repoSlug}' deleted successfully.`, "success");
+    await fetchRegisteredRepositories();
+    if (currentRepo === repoKey) {
+      currentRepo = 'pydantic';
+      await onRepoSelectChange('pydantic');
+    }
+  } catch (err) {
+    notify(err.message || "Failed to delete repository", "error");
   }
 }
 

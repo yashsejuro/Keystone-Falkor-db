@@ -32,6 +32,15 @@ const KeystoneAPI = {
     return res.json();
   },
 
+  async deleteRepository(repo, dropGraph = false) {
+    const res = await fetch(`/api/repositories/${encodeURIComponent(repo)}?drop_graph=${dropGraph}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Failed to delete repository (HTTP ${res.status})`);
+    return data;
+  },
+
   async getPRs(repoOrOpts, page = 1, pageSize = 25, q = '', filterBy = 'all', signal = null) {
     let url = '/api/prs?';
     let abortSignal = signal;

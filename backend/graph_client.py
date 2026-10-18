@@ -116,6 +116,74 @@ def register_repo(repo_slug: str, graph_name: Optional[str] = None) -> str:
     return key
 
 
+def unregister_repo(repo_slug_or_key: str, drop_graph: bool = False) -> dict:
+    """Unregister a repository from the registry and optionally delete its FalkorDB graph."""
+    clean = repo_slug_or_key.strip().lower()
+    
+    # Identify canonical key and graph name
+    target_key = None
+    target_graph = None
+    target_slug = None
+
+    if clean in REPOS:
+        target_key = clean
+        target_graph = REPOS[clean]
+        target_slug = REPO_SLUGS.get(clean, clean)
+    else:
+        for k, slug in REPO_SLUGS.items():
+            if slug.lower() == clean:
+                target_key = k
+                target_graph = REPOS.get(k)
+                target_slug = slug
+                break
+
+    if not target_key:
+        raise ValueError(f"Repository '{repo_slug_or_key}' is not registered.")
+
+    # Guard against accidental deletion of core sample repositories
+    if target_key in ("pydantic", "fastapi"):
+        raise ValueError(f"Core demonstration repository '{target_key}' cannot be deleted.")
+
+    with _REGISTRY_LOCK:
+        # Remove from in-memory maps
+        REPOS.pop(target_key, None)
+        REPO_SLUGS.pop(target_key, None)
+        if target_slug:
+            REPOS.pop(target_slug.lower(), None)
+            REPO_SLUGS.pop(target_slug.lower(), None)
+
+        # Remove from repositories.json
+        if REGISTRY_PATH.exists():
+            try:
+                saved = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+                saved.pop(target_key, None)
+                if target_slug:
+                    saved.pop(target_slug.lower(), None)
+                REGISTRY_PATH.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
+    _graph_for.cache_clear()
+    METADATA_CACHE.invalidate()
+
+    graph_dropped = False
+    if drop_graph and target_graph:
+        try:
+            db_conn = _db()
+            db_conn.select_graph(target_graph).delete()
+            graph_dropped = True
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "repo": target_slug or target_key,
+        "graph_name": target_graph,
+        "graph_dropped": graph_dropped,
+        "message": f"Repository '{target_slug or target_key}' unregistered successfully."
+    }
+
+
 @lru_cache(maxsize=1)
 def _db():
     host = os.getenv("FALKOR_HOST")

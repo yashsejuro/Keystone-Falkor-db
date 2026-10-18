@@ -124,27 +124,27 @@
 
       <!-- Core Coverage Metrics Grid: Universe, Ingested, Active Window, Showing/Page -->
       <div class="coverage-metrics-grid">
-        <div class="coverage-metric-card">
+        <div class="coverage-metric-card" title="Total number of closed/merged PRs that exist in the upstream GitHub repository.">
           <div class="coverage-metric-value" id="cov-github-total">—</div>
-          <div class="coverage-metric-label">PRs available on GitHub</div>
+          <div class="coverage-metric-label">1. PRs on GitHub (Universe)</div>
           <div style="font-size: 10px; color: #64748B; margin-top: 2px;" id="cov-discovered-sub">— discovered</div>
         </div>
 
-        <div class="coverage-metric-card">
+        <div class="coverage-metric-card" title="Number of PRs whose files, reviews, and authors are currently imported into FalkorDB.">
           <div class="coverage-metric-value" id="cov-ingested" style="color: #2563EB;">—</div>
-          <div class="coverage-metric-label">PRs ingested into Keystone</div>
+          <div class="coverage-metric-label">2. PRs Ingested in Graph</div>
           <div style="font-size: 10px; color: #2563EB; margin-top: 2px;" id="cov-ingested-pct">—</div>
         </div>
 
-        <div class="coverage-metric-card">
+        <div class="coverage-metric-card" title="Number of ingested PRs within the active time window used for reviewer recommendation scoring.">
           <div class="coverage-metric-value" id="cov-analysis-window" style="color: #16A34A;">—</div>
-          <div class="coverage-metric-label">PRs in active analysis window</div>
+          <div class="coverage-metric-label">3. In Active Analysis Window</div>
           <div style="font-size: 10px; color: #16A34A; margin-top: 2px;" id="cov-window-label">Last 90 days</div>
         </div>
 
-        <div class="coverage-metric-card">
+        <div class="coverage-metric-card" title="Number of PRs currently shown on the explorer page out of all matching filter results.">
           <div class="coverage-metric-value" id="cov-showing-count">—</div>
-          <div class="coverage-metric-label" id="cov-page-info">Showing PRs · Page —</div>
+          <div class="coverage-metric-label" id="cov-page-info">4. Showing PRs · Page —</div>
           <div style="font-size: 10px; color: #64748B; margin-top: 2px;" id="cov-matching-sub">— matching filters</div>
         </div>
       </div>
@@ -376,26 +376,26 @@
               <span class="badge badge-blue">Human-in-the-Loop</span>
             </div>
             <div class="card-body" style="display: flex; flex-direction: column; gap: 14px;">
-              <p style="font-size: 12px; color: #475569;">
-                Review the proposed actions before execution. Select dispatch mode:
-              </p>
+              <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: var(--radius-sm); padding: 10px; font-size: 12px; color: #166534;">
+                <strong>Next Step:</strong> Review Keystone's graph-scored recommendation, then select a dispatch mode below to record or request the review.
+              </div>
 
               <!-- Mode Selection Radios -->
               <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
                 <label style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;" id="mode-label-dryrun">
                   <input type="radio" name="dispatch-mode" value="DRY_RUN" onchange="onModeChange('DRY_RUN')">
-                  <strong style="font-size: 12px;">Dry-Run</strong>
-                  <span style="font-size: 11px; color: #64748B;">Simulate only</span>
+                  <strong style="font-size: 12px;">1. Dry-Run</strong>
+                  <span style="font-size: 11px; color: #64748B;">Test & validate proposal</span>
                 </label>
                 <label style="border: 2px solid var(--accent-primary); background: #EFF6FF; border-radius: var(--radius-sm); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;" id="mode-label-shadow">
                   <input type="radio" name="dispatch-mode" value="SHADOW" checked onchange="onModeChange('SHADOW')">
-                  <strong style="font-size: 12px; color: #1D4ED8;">Shadow</strong>
-                  <span style="font-size: 11px; color: #64748B;">Record in audit</span>
+                  <strong style="font-size: 12px; color: #1D4ED8;">2. Shadow (Recommended)</strong>
+                  <span style="font-size: 11px; color: #64748B;">Record in audit ledger</span>
                 </label>
                 <label style="border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;" id="mode-label-live">
                   <input type="radio" name="dispatch-mode" value="LIVE" onchange="onModeChange('LIVE')">
-                  <strong style="font-size: 12px;">Live GitHub</strong>
-                  <span style="font-size: 11px; color: #64748B;">Real PR review</span>
+                  <strong style="font-size: 12px;">3. Live GitHub</strong>
+                  <span style="font-size: 11px; color: #64748B;">Dispatch real review request</span>
                 </label>
               </div>
 
@@ -412,9 +412,14 @@
                 </label>
               </div>
 
-              <button id="btn-dispatch-action" onclick="dispatchAction()" class="btn btn-primary" style="font-weight: 600;">
-                <span>Approve and Dispatch Action</span>
-              </button>
+              <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <button id="btn-dispatch-action" onclick="dispatchAction()" class="btn btn-primary" style="font-weight: 600;">
+                  <span>Approve and Dispatch Action</span>
+                </button>
+                <button type="button" onclick="switchMainSection('evidence')" class="btn btn-secondary btn-sm">
+                  <span>🔍 Inspect Graph Evidence First</span>
+                </button>
+              </div>
             </div>
           </div>
 
