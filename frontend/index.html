@@ -405,11 +405,14 @@
               </div>
 
               <!-- Action Confirmation Checkbox (for Live) -->
-              <div id="live-confirmation-container" style="display: none; padding: 10px; background: #FFFBEB; border: 1px solid #FEF3C7; border-radius: var(--radius-sm); font-size: 12px;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #B45309; font-weight: 600;">
+              <div id="live-confirmation-container" style="display: none; padding: 12px; background: #FFFBEB; border: 1px solid #FEF3C7; border-radius: var(--radius-sm); font-size: 12px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #B45309; font-weight: 600; margin-bottom: 6px;">
                   <input type="checkbox" id="live-confirm-checkbox">
                   I confirm dispatching this live action to the authorized GitHub repository.
                 </label>
+                <div style="font-size: 11px; color: #78350F; line-height: 1.4;">
+                  🛡️ <strong>Safety Sandbox:</strong> Live GitHub mutations require <code>KEYSTONE_WRITE_REPOS</code> in <code>.env</code> to prevent accidental write calls to public repositories. For demonstrations, select <strong>2. Shadow (Recommended)</strong> to safely record and audit reviewer routings.
+                </div>
               </div>
 
               <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">

@@ -15,7 +15,7 @@
     },
     "ingested": 2460,
     "status": "partially_ingested",
-    "last_updated_at": "2026-10-18T09:35:44.417410+00:00"
+    "last_updated_at": "2026-10-18T10:50:16.528151+00:00"
   },
   "fastapi/fastapi": {
     "github_total": 14200,
@@ -33,19 +33,20 @@
     }
   },
   "redis/redis": {
-    "github_total": 15900,
+    "github_total": 8388,
     "discovered": 5200,
     "failed": 0,
     "skipped": 10,
     "earliest_discovered": "2010-04-10T00:00:00Z",
     "latest_discovered": "2026-10-18T00:00:00Z",
-    "last_discovery_at": "2026-10-18T08:00:00Z",
+    "last_discovery_at": "2026-10-18T10:58:50.034037+00:00",
     "last_sync_at": "2026-10-18T08:00:00Z",
     "discovery_status": "Connected",
     "current_ingestion_scope": {
       "type": "recent",
       "limit": 500
-    }
+    },
+    "last_updated_at": "2026-10-18T10:58:50.034904+00:00"
   },
   "test/repo-alpha": {
     "github_total": 45000,
@@ -53,13 +54,13 @@
     "failed": 12,
     "skipped": 5,
     "status": "partially_ingested",
-    "last_updated_at": "2026-10-18T09:35:36.013927+00:00"
+    "last_updated_at": "2026-10-18T10:50:10.960406+00:00"
   },
   "org/sample-repo": {
     "github_total": 10000,
     "discovered": 3500,
     "status": "partially_ingested",
-    "last_updated_at": "2026-10-18T09:35:36.528384+00:00"
+    "last_updated_at": "2026-10-18T10:50:12.539289+00:00"
   },
   "test/repo-beta": {
     "github_total": 1200,
@@ -67,11 +68,11 @@
     "failed": 0,
     "skipped": 0,
     "status": "ingestion_completed",
-    "last_updated_at": "2026-10-18T09:35:36.014388+00:00"
+    "last_updated_at": "2026-10-18T10:50:10.961726+00:00"
   },
   "test/scope-repo": {
     "github_total": 10000,
     "discovered": 3500,
-    "last_updated_at": "2026-10-18T09:35:36.335575+00:00"
+    "last_updated_at": "2026-10-18T10:50:11.628399+00:00"
   }
 }

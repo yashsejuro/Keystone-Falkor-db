@@ -1,65 +1,33 @@
-### Judge demo (3–5 minute flow)
-1. Open the app and select a repository.
-2. Check the coverage panel; counts should appear only after a live repository/graph selection.
-3. Open the PR Explorer and use the page-size selector + search box.
-4. Select a PR and run Analyze.
-5. Confirm the top reviewer appears above the fold with graph evidence and a path.
-6. Open the MCP tool panel and run rank_reviewers + explain_path.
-7. Run one safe Cypher query (read-only, bounded LIMIT).
-8. Approve a SHADOW or DRY_RUN action and confirm the label is shown clearly.
+## Judge Quick Start (10 seconds)
 
----
+Elevator pitch (10s)
+Keystone automatically routes pull requests to the best reviewers by querying a live FalkorDB graph (PR → File → REVIEWED → Reviewer) and producing a transparent score, an explainable graph path, and safe, auditable actions (DRY_RUN / SHADOW / LIVE).
 
-# Keystone
+Why this is unique (say this in one line)
 
-A graph-powered pull-request reviewer-routing and knowledge-risk application built on **FastAPI**, **FalkorDB**, and clean vanilla modern frontend technology (HTML, CSS, JavaScript).
+- Real graph-first reasoning: recommendations come from FalkorDB PR, File, REVIEWED, TOUCHES and CO_CHANGES relationships — no hard-coded reviewers or demo fallbacks.
+- Explainable evidence: every suggestion includes a visible shortest-path and file overlap evidence plus centrality-based risk signals.
+- Same logic exposed to users and MCP tools: the web UI, MCP rank_reviewers, and explain_path all use identical graph-backed code.
+- Safe operations: Cypher explorer is read-only and bounded; LIVE actions require explicit confirmation and repo whitelist.
 
-Keystone analyzes codebases as connected data: traversing git histories, co-change topologies, and betweenness centrality to route pull requests to the best-qualified reviewers, eliminate knowledge monopolies, and explain decisions transparently.
+What to show (assets to include in the repo and present to judges)
 
----
+- assets/graph-overview.png — simple diagram of nodes & relationships (alt: "Graph map: PR → File → Person relationships")
+- assets/demo-landing.png — screenshot of landing page with coverage panel (alt: "Landing page with repository coverage")
+- assets/recommendation.png — screenshot showing reviewer, score, and evidence (alt: "Recommended reviewer with score and evidence")
+- assets/graph-path.png — screenshot of the shortest path / Vis.js view (alt: "Shortest path from PR to reviewer")
+- assets/mcp-output.png — screenshot of MCP rank_reviewers output (alt: "MCP rank_reviewers result")
+- assets/cypher-result.png — screenshot of a safe Cypher query result (alt: "Cypher read-only result")
+- assets/action-ledger.png — screenshot showing SHADOW or DRY_RUN ledger entry (alt: "Action ledger showing shadow mode")
+- demo/video.mp4 or a short hosted video link (30–60s) showing the flow end-to-end
 
-## The Primary User Journey
+Minimal graph map (Mermaid) — render or export as PNG and add to assets/graph-overview.png:
 
-Keystone is organized around an intuitive 8-step journey across 3 focused application sections:
-
-1. **Connect or select a repository** — Choose from registered codebases or connect any GitHub repository (`owner/name`).
-2. **Monitor ingestion & freshness** — View real-time ingestion progress, graph telemetry, and data provenance.
-3. **Select a pull request** — Browse PRs using debounced search and filters (All, Reviewed, Unreviewed, High Risk).
-4. **Analyze the pull request** — Trigger deterministic, non-blocking graph reasoning.
-5. **See recommended reviewers** — View primary and secondary reviewer candidates with composite scores.
-6. **Understand why they were selected** — Read clear, human-readable justifications and risk flags.
-7. **Inspect graph evidence** — Explore direct file overlaps, review history, co-change bridges, and an interactive light-theme subgraph.
-8. **Approve a clearly labeled action** — Dispatch actions under explicit approval gates: `DRY_RUN`, `SHADOW`, or `LIVE`.
-
----
-
-## Application Structure (3 Primary Sections)
-
-### Section 1: Review Routing (Default Landing)
-- **Repository Context Bar**: Switch between registered repositories or initiate a new connection.
-- **Searchable PR Selector**: Paginated pull request browser with instant debounced search and status filters.
-- **Reviewer Recommendations**:
-  - **Primary Reviewer**: Prominently highlights the top graph-scored candidate, shared file count, recent reviews, coverage %, and clear bulleted reasoning.
-  - **Secondary Reviewer**: Suggests an alternative candidate for backup and knowledge-sharing.
-- **Risk Summary**: Surfaces architectural blast radius, bus-factor coverage gaps, and stale reviewer warnings.
-- **Action Approval Gate**: Approves actions with explicit mode selection (`DRY_RUN`, `SHADOW`, `LIVE`).
-
-### Section 2: Evidence
-- **Narrative Explanation**: Plain-language justification explaining candidate selection.
-- **Direct File Overlap**: Table of files changed in the PR that the candidate previously reviewed.
-- **Co-Change Bridges**: Bridge files traversed on the `CO_CHANGES` graph to connect candidates who have reviewed related modules.
-- **Shortest Path**: Step-by-step visual chain from PR to candidate reviewer.
-- **Interactive Knowledge Subgraph**: High-contrast Vis.js network visualization with zoom, fit, and reset controls.
-
-### Section 3: Repository Health & Ingestion
-- **Repository Connection & Ingestion Panel**: Start background ingestion for any GitHub repository with live progress tracking, cancel, and retry capabilities.
-- **Graph Freshness & Provenance**: Live node, edge, PR, and scored file counts with recorded GitHub API provenance.
-- **Centrality Architecture**: Status (`current`, `stale`, or `unavailable`) and manual materialization trigger.
-- **Bus-Factor Analysis**: Files where a single reviewer performed >60% of reviews (monopoly bottleneck risk).
-- **Action Audit Ledger**: Server-side filtered and paginated audit history distinguishing simulation, shadow, and live execution.
-- **Benchmark Validation**: Top-1 and Top-3 accuracy metrics compared against relational baselines.
-
----
-
-## Design System (Light Theme)
-
+```mermaid
+graph LR
+  PR[PullRequest] -->|TOUCHES| File[File]
+  PR -->|AUTHORED_BY| Author[Person]
+  Person -->|REVIEWED| PR
+  File -->|CO_CHANGES| File2[File]
+  File2 -->|REVIEWED_IN| PR2[PullRequest]
+  PR2 -->|REVIEWED_BY| Reviewer[Person]

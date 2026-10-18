@@ -19,7 +19,7 @@ import uvicorn
 from backend.graph_client import (
     node_count, edge_count, get_connection_status, get_graph,
     list_repos, DEFAULT_REPO, REPOS, REPO_SLUGS, graph_provenance,
-    validate_repo, is_valid_repo, execute_graph_query
+    validate_repo, is_valid_repo, execute_graph_query, unregister_repo
 )
 from backend.agent import run_keystone, plan
 from backend.tools import (
@@ -172,6 +172,19 @@ async def api_repositories():
         repos = await run_in_threadpool(get_registered_repositories)
         return JSONResponse({"repositories": repos, "count": len(repos)})
     except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/repositories/{repo:path}")
+async def api_delete_repository(repo: str, drop_graph: bool = True):
+    """Unregister a repository after usage and delete its FalkorDB graph."""
+    try:
+        res = await run_in_threadpool(unregister_repo, repo, drop_graph)
+        return JSONResponse(res)
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
+    except Exception as e:
+        logger.error(f"Failed to unregister repository {repo}: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

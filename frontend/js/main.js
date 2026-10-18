@@ -388,10 +388,11 @@ async function removeRepository(repoKey, repoSlug) {
     return;
   }
   try {
-    await KeystoneAPI.deleteRepository(repoKey, true);
-    notify(`Repository '${repoSlug}' deleted successfully.`, "success");
+    const target = repoSlug || repoKey;
+    await KeystoneAPI.deleteRepository(target, true);
+    notify(`Repository '${target}' deleted successfully from FalkorDB and Keystone.`, "success");
     await fetchRegisteredRepositories();
-    if (currentRepo === repoKey) {
+    if (currentRepo === repoKey || currentRepo === repoSlug) {
       currentRepo = 'pydantic';
       await onRepoSelectChange('pydantic');
     }
