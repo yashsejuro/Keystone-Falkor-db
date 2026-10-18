@@ -33,8 +33,12 @@ def get_centrality_status(repo: str = DEFAULT_REPO) -> dict:
         repo=key
     ).result_set
 
-    if rows:
-        status, updated_at, file_count, algo = rows[0]
+    if rows and len(rows[0]) >= 1:
+        row = rows[0]
+        status = row[0] if len(row) > 0 else "current"
+        updated_at = row[1] if len(row) > 1 else None
+        file_count = row[2] if len(row) > 2 else 0
+        algo = row[3] if len(row) > 3 else "betweenness"
         result = {
             "status": status or "current",
             "updated_at": updated_at,

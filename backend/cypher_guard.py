@@ -69,11 +69,13 @@ def validate_cypher_query(query: str) -> None:
         lower_b, upper_b = match.groups()
         if upper_b is None:
             raise CypherSecurityError("Unbounded variable-length path traversal is forbidden. Specify a bounded upper limit (e.g. *1..4).")
+        hops_limit = None
         try:
-            if int(upper_b) > MAX_PATH_HOPS:
-                raise CypherSecurityError(f"Path traversal depth of {upper_b} exceeds maximum allowable hops ({MAX_PATH_HOPS}).")
-        except ValueError:
+            hops_limit = int(upper_b)
+        except (ValueError, TypeError):
             raise CypherSecurityError("Invalid path traversal syntax.")
+        if hops_limit > MAX_PATH_HOPS:
+            raise CypherSecurityError(f"Path traversal depth of {upper_b} exceeds maximum allowable hops ({MAX_PATH_HOPS}).")
 
 
 def sanitize_and_bound_query(query: str, max_rows: int = MAX_RESULT_ROWS) -> str:

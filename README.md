@@ -1,139 +1,197 @@
 # Keystone
 
-A knowledge-risk and reviewer-routing agent for codebases, built on FalkorDB.
-It fires on PR events, decides using graph algorithms as tools, and explains
-every answer as a highlighted subgraph path.
+A graph-powered pull-request reviewer-routing and knowledge-risk application built on **FastAPI**, **FalkorDB**, and clean vanilla modern frontend technology (HTML, CSS, JavaScript).
 
-## Why graphs
+Keystone analyzes codebases as connected data: traversing git histories, co-change topologies, and betweenness centrality to route pull requests to the best-qualified reviewers, eliminate knowledge monopolies, and explain decisions transparently.
 
-FalkorDB's own hackathon page asks *"who knows about this system?"* — Keystone
-is the agent that answers it, and then acts on the answer.
+---
 
-## What it does
+## The Primary User Journey
 
-Given a PR number, Keystone:
-1. Finds every file the PR touches
-2. Walks backward through the graph: files → past PRs → reviewers
-3. Runs graph algorithms (betweenness, shortest path) as agent-callable tools
-4. Scores candidates deterministically on shared files, recency, and overload
-5. Flags bus-factor-1 files the PR touches (files where one person did >60%
-   of reviews in the last 90 days)
-6. Proposes actions (request review, add risk label) with an approval gate
-7. Renders the decision as a highlighted subgraph path
+Keystone is organized around an intuitive 8-step journey across 3 focused application sections:
 
-## Backtest
+1. **Connect or select a repository** — Choose from registered codebases or connect any GitHub repository (`owner/name`).
+2. **Monitor ingestion & freshness** — View real-time ingestion progress, graph telemetry, and data provenance.
+3. **Select a pull request** — Browse PRs using debounced search and filters (All, Reviewed, Unreviewed, High Risk).
+4. **Analyze the pull request** — Trigger deterministic, non-blocking graph reasoning.
+5. **See recommended reviewers** — View primary and secondary reviewer candidates with composite scores.
+6. **Understand why they were selected** — Read clear, human-readable justifications and risk flags.
+7. **Inspect graph evidence** — Explore direct file overlaps, review history, co-change bridges, and an interactive light-theme subgraph.
+8. **Approve a clearly labeled action** — Dispatch actions under explicit approval gates: `DRY_RUN`, `SHADOW`, or `LIVE`.
 
-The graph scorer is evaluated against three baselines on a 90-day time-based
-split with zero leakage. Test set: 60 PRs merged after the cutoff, each with
-at least one human reviewer.
+---
 
-| method | top-1 | top-3 |
-|---|---|---|
-| baseline_frequent | 40.0% | 73.3% |
-| baseline_directory | 21.7% | 46.7% |
-| vector_only | 21.7% | 46.7% |
-| **graph_scorer** | **51.7%** | 63.3% |
+## Application Structure (3 Primary Sections)
 
-**The graph scorer beats the strongest baseline by 12 points on top-1**, which
-is the metric that matters for real use. It loses top-3 to a degenerate
-baseline that returns the same three names on every PR.
+### Section 1: Review Routing (Default Landing)
+- **Repository Context Bar**: Switch between registered repositories or initiate a new connection.
+- **Searchable PR Selector**: Paginated pull request browser with instant debounced search and status filters.
+- **Reviewer Recommendations**:
+  - **Primary Reviewer**: Prominently highlights the top graph-scored candidate, shared file count, recent reviews, coverage %, and clear bulleted reasoning.
+  - **Secondary Reviewer**: Suggests an alternative candidate for backup and knowledge-sharing.
+- **Risk Summary**: Surfaces architectural blast radius, bus-factor coverage gaps, and stale reviewer warnings.
+- **Action Approval Gate**: Approves actions with explicit mode selection (`DRY_RUN`, `SHADOW`, `LIVE`).
 
-The advantage concentrates where the problem is hardest:
+### Section 2: Evidence
+- **Narrative Explanation**: Plain-language justification explaining candidate selection.
+- **Direct File Overlap**: Table of files changed in the PR that the candidate previously reviewed.
+- **Co-Change Bridges**: Bridge files traversed on the `CO_CHANGES` graph to connect candidates who have reviewed related modules.
+- **Shortest Path**: Step-by-step visual chain from PR to candidate reviewer.
+- **Interactive Knowledge Subgraph**: High-contrast Vis.js network visualization with zoom, fit, and reset controls.
 
-- **Cross-module PRs (n=42):** graph_scorer 54.8% vs baseline 28.6% — 26 points
-- **Single-file PRs (n=18):** baseline 66.7% vs graph_scorer 44.4% — baseline wins
+### Section 3: Repository Health & Ingestion
+- **Repository Connection & Ingestion Panel**: Start background ingestion for any GitHub repository with live progress tracking, cancel, and retry capabilities.
+- **Graph Freshness & Provenance**: Live node, edge, PR, and scored file counts with recorded GitHub API provenance.
+- **Centrality Architecture**: Status (`current`, `stale`, or `unavailable`) and manual materialization trigger.
+- **Bus-Factor Analysis**: Files where a single reviewer performed >60% of reviews (monopoly bottleneck risk).
+- **Action Audit Ledger**: Server-side filtered and paginated audit history distinguishing simulation, shadow, and live execution.
+- **Benchmark Validation**: Top-1 and Top-3 accuracy metrics compared against relational baselines.
 
-On single-file PRs, "whoever always reviews this file" wins. On cross-module
-PRs — where knowledge is distributed across people and files — the graph wins
-by a wide margin. This is calibrated honesty, not cherry-picking.
+---
 
-## Graph schema
+## Design System (Light Theme)
 
-Nodes: Person, PullRequest, File
-Edges:
-- (Person)-[:AUTHORED]->(PullRequest)
-- (Person)-[:REVIEWED {at, state}]->(PullRequest)
-- (PullRequest)-[:TOUCHES]->(File)
-- (File)-[:CO_CHANGES {weight}]-(File)
+Keystone features a focused, readable light theme designed for low cognitive load and clear visual hierarchy:
 
-## Graph algorithms used
+- **Application background**: `#F8FAFC`
+- **Card background**: `#FFFFFF`
+- **Primary text**: `#0F172A`
+- **Secondary text**: `#475569`
+- **Muted text**: `#64748B`
+- **Border**: `#E2E8F0`
+- **Primary accent**: `#2563EB`
+- **Secondary accent**: `#4F46E5`
+- **Success**: `#16A34A`
+- **Warning**: `#D97706`
+- **Danger**: `#DC2626`
 
-- `algo.betweenness.stream('File', 'CO_CHANGES')` — critical file ranking
-- `shortestPath()` — explainability path from PR files to a candidate
-- Recursive relationship traversal — multi-hop reviewer candidates
+---
 
-## Local setup
+## Architecture & Performance Enhancements
 
-### Windows: one-click launch
+- **Non-blocking Event Loop**: All synchronous FalkorDB queries, external GitHub calls, and LLM operations execute via threadpools (`run_in_threadpool`), preventing event loop starvation.
+- **Deduplicated Investigation**: Single-pass data gathering in `run_keystone()` completely eliminates redundant calls to `get_pr`, `pr_criticality`, `bus_factor_files`, and duplicate `explain_path`.
+- **Precomputed Centrality**: Normal API queries read precomputed `File.centrality` values rather than executing expensive `CALL algo.betweenness` at request time.
+- **Server-Side PR Pagination**: PRs are paginated and filtered directly in Cypher with parameterization and database indexes.
+- **Cypher Security Guard**: Protects `/api/cypher` by enforcing read-only constraints, rejecting mutation keywords (`CREATE`, `MERGE`, `DELETE`, `SET`), blocking heavy algorithm procedures, restricting traversal hops, and enforcing row limits.
+- **Metadata Caching**: Short-lived thread-safe TTL cache (`METADATA_CACHE`) for status endpoints with invalidation upon ingestion.
 
-1. Install stable Python 3.11, 3.12, or 3.13 once from https://www.python.org/downloads/.
-2. Double-click `run_keystone.bat`.
+---
 
-The launcher creates a local virtual environment, installs dependencies, creates
-`.env` from `.env.example` when needed, opens the browser, and starts Keystone.
-On the first run, add `FALKOR_HOST`, `FALKOR_PORT`, `FALKOR_USER`,
-`FALKOR_PASS`, and optionally `GITHUB_TOKEN` to `.env`, then double-click the
-launcher again. Later runs reuse the existing environment.
+## Setup & Running Locally
 
-### Ingest a repository from the UI
+### 1. Requirements
+- Python 3.11, 3.12, or 3.13
+- A running FalkorDB instance (local or FalkorDB Cloud)
+- (Optional) GitHub Personal Access Token (for repository ingestion and live actions)
 
-On the welcome screen, use **Connect real repository data**:
+### 2. Configuration (`.env`)
+Copy the example environment configuration:
 
-1. Paste a GitHub repository URL, for example `https://github.com/pydantic/pydantic`.
-2. Choose how many merged PRs to import.
-3. Click **Connect and ingest real PRs**.
+```bash
+cp .env.example .env
+```
 
-Keystone fetches merged pull requests, changed files, authors, and submitted
-reviews from the GitHub API. Ingestion runs in the background, skips PRs already
-in the graph, and records a provenance marker containing the source repository
-and import time. No synthetic PRs or reviewer records are created.
+Populate the database credentials in `.env`:
 
-The current pre-existing graphs contain real connected FalkorDB data, but their
-original ingestion source was not recorded. The UI labels them **Existing data,
-source unmarked** rather than claiming they are newly imported or demo data.
+```ini
+FALKOR_HOST=your-falkordb-host
+FALKOR_PORT=6379
+FALKOR_USER=
+FALKOR_PASS=your-falkordb-password
+GITHUB_TOKEN=your-github-token
 
-### Terminal launch
+# Optional action dispatch settings
+KEYSTONE_WRITE_REPOS=owner/repo
+KEYSTONE_SANDBOX_REPO=yashsejuro/keystone-sandbox
+```
 
-    pip install -r requirements.txt
-    # set FALKOR_HOST, FALKOR_PORT, FALKOR_USER, FALKOR_PASS, GITHUB_TOKEN in .env
-    python app.py
+### 3. Install Dependencies & Launch
 
-### Connect MCP without editing JSON
+```bash
+# Create virtual environment
+python -m venv .venv
 
-When Keystone is running, its MCP tools are available over Streamable HTTP at:
+# Activate virtual environment
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
+source .venv/bin/activate
 
-    http://localhost:3000/mcp
+# Install dependencies
+pip install -r requirements.txt
 
-Use the **Connect MCP** link in the navbar, then click **Connect to Claude**.
-Keystone starts a temporary Cloudflare HTTPS tunnel and displays the complete
-public URL, including `/mcp`, for copying into Claude's custom connector.
-Users do not need to find or run a batch file.
+# Start the application
+python app.py
+```
 
-The automatic tunnel is for demos and is not a 10-day service. For a stable
-connection, create a Cloudflare named tunnel once, point it at Keystone, and set
-`CLOUDFLARED_TUNNEL_TOKEN` plus `MCP_PUBLIC_URL` in `.env`. The same **Connect
-to Claude** button will then start the named tunnel and return the stable URL.
-For a real team deployment, run Keystone on a hosted machine with HTTPS and
-authentication rather than exposing a personal laptop.
+The application will be live at: **`http://localhost:3000`**
 
-The existing `mcp_server.py` stdio entrypoint remains available for clients that
-require local process configuration.
+---
 
-## Deployment
+## Repository Ingestion Workflow
 
-The FastAPI app connects to FalkorDB Cloud.
+To ingest a new repository:
 
-## AI usage disclosure
+1. Navigate to **3. Repository Health** in the application.
+2. Under **Connect and Ingest GitHub Repository**, enter the repository slug in `owner/name` format (e.g. `fastapi/fastapi`).
+3. Select your target PR limit (e.g., 50, 100, 250, 500).
+4. Click **Connect & Ingest**.
+5. The background worker will:
+   - Validate repository existence on GitHub.
+   - Register a collision-safe graph name (`keystone_{owner}_{name}_{hash}`).
+   - Create indexes on `(:Person.login)`, `(:PullRequest.number)`, and `(:File.path)`.
+   - Paginate merged pull requests, changed files, and reviews.
+   - Bulk-insert nodes and relationships using Cypher `UNWIND`.
+   - Record ingestion provenance metadata.
+   - Automatically compute and store `File.centrality` post-ingest.
+   - Invalidate metadata caches.
 
-No LLM runs in the decision path. The reviewer score is deterministic Python
-and Cypher.
-## Demo
+Ingestion is **manual on demand** (not continuously streaming), **resumable**, and **idempotent**.
 
-[SCREENSHOT HERE — the localhost view of PR 13997]
+---
 
-The output above shows:
-- 4-step plan trace
-- davidhewitt ranked first (score 0.93, shared 3 files, 6 recent reviews)
-- Two bus-factor files flagged as coverage gaps
-- 4 proposed actions behind an approval gate
-- Explainability path: 4 files shared between PR #13997 and davidhewitt
+## Action Execution Modes
+
+Keystone distinguishes four clear execution states:
+
+| Mode | Behavior | Upstream Notification |
+|:-----|:---------|:----------------------|
+| `DRY_RUN` | Simulated locally. No network calls. | None |
+| `SHADOW` | Logged into tracking sandbox issue. Usernames formatted as code. | None |
+| `LIVE` | Dispatched to GitHub API (`requested_reviewers` / `labels`). Requires confirmation and repo whitelist in `KEYSTONE_WRITE_REPOS`. | Yes (upstream assignees) |
+| `FAILED` | Recorded when authorization or network dispatch fails. | None |
+
+---
+
+## Running Automated Tests
+
+Keystone includes a comprehensive automated test suite covering validation, Cypher security, action ledgers, ingestion, centrality, and API integration:
+
+```bash
+# Run the complete test suite
+pytest tests/ -v
+```
+
+All tests use mocks for external services and do not require real database or GitHub credentials.
+
+---
+
+## Running Benchmarks
+
+To reproduce backtest accuracy numbers comparing graph-based scoring against relational baselines:
+
+```bash
+python backtest.py
+```
+
+Results are saved to `benchmark_results.json` and served truthfully by `/api/benchmark`.
+
+---
+
+## Known Limitations & Production Recommendations
+
+1. **Ingestion Scheduling**: Ingestion is triggered via user request or API call. For continuous ingestion, deploy an external cron job or GitHub webhook listener that calls `POST /api/ingest`.
+2. **GitHub Rate Limits**: Unauthenticated GitHub API calls are limited to 60 req/hr. Always configure `GITHUB_TOKEN` in `.env` to receive 5,000 req/hr.
+3. **In-Process Job Manager**: The current job manager runs in background threads within the application process. For multi-instance clustered deployments, use Redis or Celery to coordinate background jobs.
+4. **HTTPS in Production**: When deploying publicly, host behind a reverse proxy (e.g. Nginx or Cloudflare) with HTTPS enabled and configure basic authentication or OAuth for admin routes.

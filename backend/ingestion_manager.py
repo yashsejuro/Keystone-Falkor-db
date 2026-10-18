@@ -116,7 +116,7 @@ class IngestionJobManager:
                 cls._instance = super(IngestionJobManager, cls).__new__(cls)
                 cls._instance._jobs = {}
                 cls._instance._active_repos = {}
-                cls._instance._manager_lock = threading.Lock()
+                cls._instance._manager_lock = threading.RLock()
             return cls._instance
 
     def get_job(self, job_id: str) -> Optional[IngestionJob]:
@@ -146,8 +146,11 @@ class IngestionJobManager:
 
         normalized = clean_slug.lower()
         with self._manager_lock:
-            if self.is_repo_busy(normalized):
-                raise RuntimeError(f"An ingestion job for repository '{clean_slug}' is already in progress.")
+            active_id = self._active_repos.get(normalized)
+            if active_id:
+                existing_job = self._jobs.get(active_id)
+                if existing_job and existing_job.status in ("QUEUED", "IN_PROGRESS"):
+                    raise RuntimeError(f"An ingestion job for repository '{clean_slug}' is already in progress.")
 
             job_id = f"ingest-{uuid.uuid4().hex[:8]}"
             job = IngestionJob(job_id, clean_slug, target_limit, materialize_centrality_flag)
