@@ -31,8 +31,9 @@ from backend.scoring import score_reviewers
 from backend.mcp_server import mcp as keystone_mcp
 from backend.cypher_guard import sanitize_and_bound_query, CypherSecurityError
 from backend.centrality import get_centrality_status, materialize_centrality, get_precomputed_critical_files
-from backend.ingestion_manager import INGESTION_MANAGER, get_registered_repositories
+from backend.ingestion_manager import INGESTION_MANAGER, get_registered_repositories, estimate_ingestion_scope
 from backend.action_ledger import ACTION_LEDGER_STORE, ALLOWED_WRITE_REPOS, SANDBOX_REPO
+from backend.coverage import get_repository_coverage, update_coverage_metadata
 
 try:
     from backend.narration import narrate
@@ -166,7 +167,7 @@ async def api_status(repo: str = DEFAULT_REPO):
 
 @app.get("/api/repositories")
 async def api_repositories():
-    """List registered repositories with their graph names and live freshness."""
+    """List registered repositories with their graph names, coverage counts, and live freshness."""
     try:
         repos = await run_in_threadpool(get_registered_repositories)
         return JSONResponse({"repositories": repos, "count": len(repos)})
@@ -174,9 +175,52 @@ async def api_repositories():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/repositories/{repo:path}/coverage")
+async def api_repository_coverage(repo: str, window_days: int = 90):
+    """Return full repository coverage metrics: GitHub universe, discovered, ingested, active window, and gaps."""
+    try:
+        repo_clean = await run_in_threadpool(validate_repo, repo)
+        cov = await run_in_threadpool(get_repository_coverage, repo_clean, window_days)
+        return JSONResponse(cov)
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
+    except Exception as e:
+        logger.error(f"Failed to fetch coverage for {repo}: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # -------------------------------------------------------------------------
 # Repository Ingestion Endpoints
 # -------------------------------------------------------------------------
+
+@app.post("/api/ingest/estimate")
+async def api_ingest_estimate(req: Request):
+    """Pre-flight scope estimation before initiating ingestion."""
+    try:
+        body = await req.json()
+        repo_slug = body.get("repo", "").strip()
+        scope_type = body.get("scope_type", "recent")
+        limit = int(body.get("limit", 100))
+        date_from = body.get("date_from")
+        date_to = body.get("date_to")
+
+        if not repo_slug:
+            return JSONResponse({"error": "Repository slug is required in owner/name format."}, status_code=400)
+
+        est = await run_in_threadpool(
+            estimate_ingestion_scope,
+            repo_slug=repo_slug,
+            scope_type=scope_type,
+            limit=limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return JSONResponse(est)
+    except ValueError as ve:
+        return JSONResponse({"error": str(ve)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.post("/api/ingest")
 async def api_ingest(req: Request):
@@ -186,6 +230,9 @@ async def api_ingest(req: Request):
         repo_slug = body.get("repo", "").strip()
         limit = int(body.get("limit", 100))
         materialize = bool(body.get("materialize_centrality", True))
+        scope_type = body.get("scope_type", "recent")
+        date_from = body.get("date_from")
+        date_to = body.get("date_to")
 
         if not repo_slug:
             return JSONResponse({"error": "Repository slug is required in owner/name format."}, status_code=400)
@@ -194,7 +241,10 @@ async def api_ingest(req: Request):
             INGESTION_MANAGER.start_job,
             repo_slug=repo_slug,
             target_limit=limit,
-            materialize_centrality_flag=materialize
+            materialize_centrality_flag=materialize,
+            scope_type=scope_type,
+            date_from=date_from,
+            date_to=date_to,
         )
 
         return JSONResponse({
@@ -251,23 +301,44 @@ async def api_centrality_refresh(req: Request):
 
 
 # -------------------------------------------------------------------------
-# PR Browser Endpoints (Paginated & Filtered)
+# PR Browser Endpoints (Server-side Paginated & Deep Filtered)
 # -------------------------------------------------------------------------
 
 @app.get("/api/prs")
 async def api_prs(repo: str = DEFAULT_REPO, page: int = 1, page_size: int = 25,
-                  limit: int = 25, q: Optional[str] = None, filter_by: str = "all"):
+                  limit: int = 25, q: Optional[str] = None, filter_by: str = "all",
+                  state: Optional[str] = None, merged: Optional[str] = None,
+                  reviewed: Optional[str] = None, risk: Optional[str] = None,
+                  author: Optional[str] = None, reviewer: Optional[str] = None,
+                  date_from: Optional[str] = None, date_to: Optional[str] = None,
+                  min_files: Optional[int] = None, max_files: Optional[int] = None,
+                  sort: str = "number", sort_direction: str = "desc",
+                  view: str = "all"):
     t0 = time.perf_counter()
     try:
         repo_clean = await run_in_threadpool(validate_repo, repo)
+        effective_page_size = page_size or limit
         data = await run_in_threadpool(
             list_recent_prs,
             page=page,
-            page_size=page_size or limit,
-            limit=limit,
+            page_size=effective_page_size,
+            limit=effective_page_size,
             repo=repo_clean,
             q=q,
-            filter_by=filter_by
+            filter_by=filter_by,
+            state=state,
+            merged=merged,
+            reviewed=reviewed,
+            risk=risk,
+            author=author,
+            reviewer=reviewer,
+            date_from=date_from,
+            date_to=date_to,
+            min_files=min_files,
+            max_files=max_files,
+            sort=sort,
+            sort_direction=sort_direction,
+            view=view,
         )
         duration_ms = round((time.perf_counter() - t0) * 1000.0, 2)
         logger.info(f"[/api/prs] {repo_clean} page {page} returned {data['count']} items in {duration_ms}ms")
@@ -385,6 +456,47 @@ async def api_investigate(req: Request):
             "total_files": len(pr_files),
         }
 
+        # Compute analysis training scope and coverage transparency
+        cov = await run_in_threadpool(get_repository_coverage, repo)
+        cov_counts = cov.get("counts", {})
+        cov_pct = cov.get("percentages", {})
+        is_partial = cov.get("is_partial", True)
+        ingested_pct = cov_pct.get("ingested_pct")
+
+        if is_partial and ingested_pct is not None:
+            confidence_notice = (
+                f"Recommendation confidence is limited because only {ingested_pct}% "
+                f"of the repository's discovered PR history has been ingested."
+            )
+        else:
+            confidence_notice = "Recommendation based on complete ingested dataset within the active analysis window."
+
+        training_summary = (
+            f"Reviewer recommendation based on: {cov_counts.get('analysis_ready', 0):,} analysis-ready PRs · "
+            f"{cov_counts.get('review_relationships', 0):,} review relationships · "
+            f"{cov.get('analysis_window', {}).get('label', 'Last 90 days')} · "
+            f"Graph updated {cov.get('statuses', {}).get('freshness', 'recently')} · "
+            f"Coverage: {'partial' if is_partial else 'complete'}"
+        )
+
+        analysis_scope = {
+            "analysis_window": cov.get("analysis_window", {}).get("label", "Last 90 days"),
+            "window_start": cov.get("analysis_window", {}).get("start"),
+            "window_end": cov.get("analysis_window", {}).get("end"),
+            "historical_prs_used": cov_counts.get("in_active_window", 0),
+            "analysis_ready_prs": cov_counts.get("analysis_ready", 0),
+            "review_relationships_used": cov_counts.get("review_relationships", 0),
+            "files_in_graph": cov_counts.get("files_in_graph", 0),
+            "graph_freshness": cov.get("statuses", {}).get("freshness", "Fresh"),
+            "last_synced_at": cov.get("last_synced_at"),
+            "coverage_quality": "partial" if is_partial else "complete",
+            "coverage_level": "partial" if is_partial else "complete",
+            "confidence_notice": confidence_notice,
+            "confidence_warning": confidence_notice,
+            "training_summary": training_summary,
+            "coverage_percentage": ingested_pct,
+        }
+
         # Optional LLM narration (non-blocking)
         narration_text = await run_in_threadpool(narrate, decision, pr_info)
 
@@ -399,6 +511,7 @@ async def api_investigate(req: Request):
             },
             "pr_details": pr_info,
             "pr_metrics": pr_metrics,
+            "analysis_scope": analysis_scope,
             "explain_path": result.get("explain_path"),
             "narration": narration_text,
             "latency_ms": duration_ms,

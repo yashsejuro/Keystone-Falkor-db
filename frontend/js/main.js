@@ -1,15 +1,38 @@
 /**
  * Keystone Main Application Controller — Production Grade
  * Clean state management, debounced search, request cancellation,
- * truthful status handling, and light-theme UI coordination.
+ * truthful status handling, full-dataset PR explorer, and light-theme UI coordination.
  */
 
 let currentRepo = 'pydantic';
 let currentPrNumber = 13997;
 let currentResult = null;
+let currentCoverage = null;
+
+// Routing Tab PR Selector state
 let currentPrFilter = 'all';
 let currentPrPage = 1;
 const prPageSize = 25;
+
+// Dedicated PR Explorer state
+let explorerState = {
+  page: 1,
+  pageSize: 25,
+  activeTab: 'recommended', // 'recommended' | 'all' | 'gaps'
+  q: '',
+  state: 'all',
+  merged: 'merged',
+  reviewed: 'all',
+  risk: 'all',
+  author: '',
+  reviewer: '',
+  dateFrom: '',
+  dateTo: '',
+  sort: 'number',
+  sortDirection: 'desc',
+  totalPages: 1,
+  totalMatching: 0,
+};
 
 let currentLedgerPage = 1;
 const ledgerPageSize = 20;
@@ -18,8 +41,10 @@ let currentLedgerMode = 'all';
 let selectedDispatchMode = 'SHADOW';
 let activeIngestJobId = null;
 let ingestPollTimer = null;
+let selectedScopeType = 'recent';
 let investigationAbortController = null;
 let prSearchAbortController = null;
+let explorerAbortController = null;
 
 // Utility: Escape untrusted values to prevent HTML injection
 function escapeHtml(str) {
@@ -60,7 +85,7 @@ function notify(message, variant = 'info') {
 // Section Switching
 // ==============================================================
 function switchMainSection(sectionId) {
-  const sections = ['routing', 'evidence', 'health'];
+  const sections = ['routing', 'explorer', 'evidence', 'health'];
   sections.forEach(s => {
     const secEl = document.getElementById(`section-${s}`);
     const btnEl = document.getElementById(`nav-btn-${s}`);
@@ -79,6 +104,8 @@ function switchMainSection(sectionId) {
 
   if (sectionId === 'evidence' && currentResult) {
     setTimeout(() => renderInteractiveNetwork(currentResult), 50);
+  } else if (sectionId === 'explorer') {
+    fetchExplorerPRs();
   }
 }
 
@@ -90,18 +117,24 @@ async function init() {
   if (params.get('repo')) currentRepo = params.get('repo');
   if (params.get('pr')) currentPrNumber = parseInt(params.get('pr'), 10) || 13997;
 
-  document.getElementById('pr-direct-input').value = currentPrNumber;
+  const directInput = document.getElementById('pr-direct-input');
+  if (directInput) directInput.value = currentPrNumber;
+
+  const ingestInput = document.getElementById('ingest-repo-input');
+  if (ingestInput) ingestInput.value = currentRepo.includes('/') ? currentRepo : `${currentRepo}/${currentRepo}`;
 
   try {
-    // 1. Fetch initial status and repositories concurrently
+    // 1. Fetch initial status, coverage, and registered repositories concurrently
     await Promise.all([
       fetchStatus(),
+      fetchRepositoryCoverage(currentRepo),
       fetchRegisteredRepositories(),
     ]);
 
-    // 2. Fetch independent secondary resources concurrently
+    // 2. Fetch secondary resources concurrently
     await Promise.all([
       fetchPRs(currentRepo, currentPrPage, ''),
+      fetchExplorerPRs(),
       fetchInsights(),
       fetchLedger(),
       fetchBenchmark(),
@@ -188,6 +221,102 @@ async function fetchStatus() {
   }
 }
 
+// ==============================================================
+// Repository Coverage Panel
+// ==============================================================
+async function fetchRepositoryCoverage(repo) {
+  try {
+    const data = await KeystoneAPI.getCoverage(repo, 90);
+    currentCoverage = data;
+    renderCoveragePanel(data);
+    renderIngestionGaps(data);
+  } catch (err) {
+    console.warn("Failed to fetch repository coverage:", err);
+  }
+}
+
+function renderCoveragePanel(cov) {
+  if (!cov) return;
+  const counts = cov.counts || {};
+  const statuses = cov.statuses || {};
+  const pcts = cov.percentages || {};
+
+  // Repository Slug
+  const slugEl = document.getElementById('coverage-repo-slug');
+  if (slugEl) slugEl.innerText = cov.repo || currentRepo;
+
+  // GitHub Universe Count
+  const ghTotalEl = document.getElementById('cov-github-total');
+  const ghSubEl = document.getElementById('cov-discovered-sub');
+  if (ghTotalEl) {
+    ghTotalEl.innerText = counts.github_total !== null && counts.github_total !== undefined
+      ? Number(counts.github_total).toLocaleString()
+      : 'Discovered';
+  }
+  if (ghSubEl) {
+    ghSubEl.innerText = `${Number(counts.discovered || 0).toLocaleString()} discovered`;
+  }
+
+  // Ingested Count
+  const ingEl = document.getElementById('cov-ingested');
+  const ingPctEl = document.getElementById('cov-ingested-pct');
+  if (ingEl) ingEl.innerText = Number(counts.ingested || 0).toLocaleString();
+  if (ingPctEl) {
+    if (pcts.ingested_pct !== null && pcts.ingested_pct !== undefined) {
+      ingPctEl.innerText = `${pcts.ingested_pct}% of GitHub universe`;
+    } else {
+      ingPctEl.innerText = "Ingested in FalkorDB";
+    }
+  }
+
+  // Active Analysis Window Count
+  const winEl = document.getElementById('cov-analysis-window');
+  const winLabelEl = document.getElementById('cov-window-label');
+  if (winEl) winEl.innerText = Number(counts.in_active_window || counts.analysis_ready || 0).toLocaleString();
+  if (winLabelEl) winLabelEl.innerText = cov.analysis_window?.label || "Last 90 days";
+
+  // Last Synced Timestamp
+  const lastSyncEl = document.getElementById('coverage-last-synced');
+  if (lastSyncEl && cov.last_synced_at) {
+    try {
+      const dt = new Date(cov.last_synced_at);
+      lastSyncEl.innerText = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch (e) {
+      lastSyncEl.innerText = cov.last_synced_at.slice(0, 10);
+    }
+  }
+
+  // Status Badges (Discovery, Ingestion, Analysis, Freshness)
+  updateStatusBadge('discovery', statuses.discovery || 'Connected', 'GitHub');
+  updateStatusBadge('ingestion', statuses.ingestion || 'Partially ingested', 'Ingestion');
+  updateStatusBadge('analysis', statuses.analysis || 'Analysis ready', 'Analysis');
+  updateStatusBadge('freshness', statuses.freshness || 'Fresh', 'Graph');
+}
+
+function updateStatusBadge(type, statusText, prefix) {
+  const pill = document.getElementById(`status-pill-${type}`);
+  const dot = document.getElementById(`status-dot-${type}`);
+  const txt = document.getElementById(`status-text-${type}`);
+  if (!pill || !txt) return;
+
+  txt.innerText = `${prefix}: ${statusText}`;
+
+  const clean = statusText.toLowerCase();
+  if (clean.includes('connected') || clean.includes('ready') || clean.includes('completed') || clean.includes('fresh')) {
+    pill.className = "status-badge-detailed badge-green";
+    if (dot) dot.className = "status-dot online";
+  } else if (clean.includes('progress') || clean.includes('partially') || clean.includes('queued')) {
+    pill.className = "status-badge-detailed badge-blue";
+    if (dot) dot.className = "status-dot busy";
+  } else if (clean.includes('stale') || clean.includes('insufficient')) {
+    pill.className = "status-badge-detailed badge-amber";
+    if (dot) dot.className = "status-dot offline";
+  } else {
+    pill.className = "status-badge-detailed badge-slate";
+    if (dot) dot.className = "status-dot offline";
+  }
+}
+
 async function fetchRegisteredRepositories() {
   try {
     const data = await KeystoneAPI.getRepositories();
@@ -231,17 +360,24 @@ async function fetchRegisteredRepositories() {
 function onRepoSelectChange(newRepo) {
   currentRepo = newRepo;
   currentPrPage = 1;
+  explorerState.page = 1;
+
   const url = new URL(window.location);
   url.searchParams.set('repo', newRepo);
   window.history.replaceState({}, '', url);
 
+  const ingestInput = document.getElementById('ingest-repo-input');
+  if (ingestInput) ingestInput.value = currentRepo.includes('/') ? currentRepo : `${currentRepo}/${currentRepo}`;
+
   fetchStatus();
+  fetchRepositoryCoverage(currentRepo);
   fetchPRs(currentRepo, 1, '');
+  fetchExplorerPRs();
   fetchInsights();
 }
 
 // ==============================================================
-// PR Search & Selection
+// PR Search & Selection in Review Routing Tab
 // ==============================================================
 const onPrSearchInput = debounce((query) => {
   currentPrPage = 1;
@@ -255,12 +391,14 @@ function setPrFilter(filter) {
     if (el) el.className = (f === filter) ? 'badge badge-blue' : 'badge badge-slate';
   });
   currentPrPage = 1;
-  fetchPRs(currentRepo, currentPrPage, document.getElementById('pr-search-input').value);
+  const searchVal = document.getElementById('pr-search-input')?.value || '';
+  fetchPRs(currentRepo, currentPrPage, searchVal);
 }
 
 function changePrPage(delta) {
   currentPrPage = Math.max(1, currentPrPage + delta);
-  fetchPRs(currentRepo, currentPrPage, document.getElementById('pr-search-input').value);
+  const searchVal = document.getElementById('pr-search-input')?.value || '';
+  fetchPRs(currentRepo, currentPrPage, searchVal);
 }
 
 async function fetchPRs(repo, page = 1, query = '') {
@@ -273,7 +411,14 @@ async function fetchPRs(repo, page = 1, query = '') {
   if (feedStatus) feedStatus.innerText = "Loading PRs...";
 
   try {
-    const data = await KeystoneAPI.getPRs(repo, page, prPageSize, query, currentPrFilter, prSearchAbortController.signal);
+    const data = await KeystoneAPI.getPRs({
+      repo,
+      page,
+      pageSize: prPageSize,
+      q: query,
+      filterBy: currentPrFilter,
+      signal: prSearchAbortController.signal
+    });
     const prs = data.prs || [];
     const select = document.getElementById('pr-select-dropdown');
     if (select) {
@@ -312,7 +457,8 @@ async function fetchPRs(repo, page = 1, query = '') {
 function onSelectPr(prNumber) {
   if (!prNumber) return;
   currentPrNumber = parseInt(prNumber, 10);
-  document.getElementById('pr-direct-input').value = currentPrNumber;
+  const input = document.getElementById('pr-direct-input');
+  if (input) input.value = currentPrNumber;
   runInvestigation(currentPrNumber);
 }
 
@@ -348,19 +494,15 @@ async function runInvestigation(prNumber) {
 
     renderPRMetadata(data.pr_details || {});
     renderReviewerRecommendations(data.decision?.reviewers || []);
-    renderRiskSummary(data.pr_metrics || {}, data.decision || {});
-    renderEvidence(data);
-
-    // Update URL without page reload
-    const url = new URL(window.location);
-    url.searchParams.set('pr', prNumber);
-    window.history.replaceState({}, '', url);
+    renderKnowledgeRisks(data.decision?.risks || [], data.pr_metrics || {});
+    renderEvidenceBreakdown(data);
+    renderInvestigationScope(data.analysis_scope || {});
+    updateProposedAction(data.decision?.reviewers || []);
 
   } catch (err) {
     if (err.name !== 'AbortError') {
       console.error("Investigation failed:", err);
-      notify(err.message || "Failed to analyze PR. Verify FalkorDB data.", "error");
-      renderEmptyRecommendation();
+      notify(err.message || "Could not analyze pull request", "error");
     }
   } finally {
     if (analyzeBtn) {
@@ -370,133 +512,193 @@ async function runInvestigation(prNumber) {
   }
 }
 
-function renderPRMetadata(pr) {
-  const titleEl = document.getElementById('pr-summary-title');
-  const authorEl = document.getElementById('pr-summary-author');
-  const filesEl = document.getElementById('pr-summary-files');
-  const addEl = document.getElementById('pr-summary-additions');
-  const delEl = document.getElementById('pr-summary-deletions');
-  const mergedEl = document.getElementById('pr-summary-merged');
+function renderInvestigationScope(scope) {
+  const card = document.getElementById('training-scope-card');
+  if (!card) return;
 
-  if (titleEl) titleEl.innerText = pr.title ? `#${pr.number}: ${pr.title}` : `#${pr.number || currentPrNumber}`;
-  if (authorEl) authorEl.innerText = `@${pr.author || 'unknown'}`;
-  if (filesEl) filesEl.innerText = pr.files_changed || (pr.files ? pr.files.length : 0);
-  if (addEl) addEl.innerText = `+${Number(pr.additions || 0).toLocaleString()}`;
-  if (delEl) delEl.innerText = `-${Number(pr.deletions || 0).toLocaleString()}`;
-  if (mergedEl) mergedEl.innerText = pr.merged_at ? new Date(pr.merged_at).toLocaleDateString() : 'Merged';
-}
+  const readyEl = document.getElementById('scope-ready-prs');
+  const revRelsEl = document.getElementById('scope-rev-rels');
+  const winEl = document.getElementById('scope-window-days');
+  const covLabelEl = document.getElementById('scope-cov-label');
+  const badgeEl = document.getElementById('training-scope-quality-badge');
+  const alertEl = document.getElementById('routing-confidence-alert');
+  const alertTextEl = document.getElementById('routing-confidence-text');
 
-function renderReviewerRecommendations(reviewers) {
-  const primaryNameEl = document.getElementById('rec-primary-name');
-  const primaryScoreEl = document.getElementById('rec-primary-score');
-  const primarySharedEl = document.getElementById('rec-primary-shared');
-  const primaryRecentEl = document.getElementById('rec-primary-recent');
-  const primaryCoverageEl = document.getElementById('rec-primary-coverage');
-  const primaryLastEl = document.getElementById('rec-primary-last');
-  const primaryReasonsEl = document.getElementById('rec-primary-reasons');
-  const actionTargetLabel = document.getElementById('action-target-label');
+  if (readyEl) readyEl.innerText = Number(scope.analysis_ready_prs || 0).toLocaleString();
+  if (revRelsEl) revRelsEl.innerText = Number(scope.review_relationships_used || 0).toLocaleString();
+  if (winEl) winEl.innerText = scope.analysis_window || "Last 90 days";
+  if (covLabelEl) covLabelEl.innerText = scope.coverage_quality || "partial";
 
-  if (!reviewers || reviewers.length === 0) {
-    renderEmptyRecommendation();
-    return;
+  if (badgeEl) {
+    const isComplete = scope.coverage_quality === 'complete';
+    badgeEl.className = isComplete ? 'badge badge-green' : 'badge badge-blue';
+    badgeEl.innerText = isComplete ? 'Complete Coverage' : 'Partial Coverage';
   }
 
-  // 1. Primary Reviewer
-  const p = reviewers[0];
-  if (primaryNameEl) primaryNameEl.innerText = `@${p.login}`;
-  if (primaryScoreEl) primaryScoreEl.innerText = p.score.toFixed(2);
-  if (primarySharedEl) primarySharedEl.innerText = `${p.shared_files} files`;
-  if (primaryRecentEl) primaryRecentEl.innerText = `${p.recent_reviews} reviews`;
-  if (primaryCoverageEl) primaryCoverageEl.innerText = `${p.coverage_pct || 0}%`;
-  if (primaryLastEl) primaryLastEl.innerText = p.days_ago !== null && p.days_ago !== undefined ? `${p.days_ago}d ago` : 'Active';
-  if (actionTargetLabel) actionTargetLabel.innerText = `@${p.login}`;
-
-  // Bullets: why this reviewer was chosen
-  if (primaryReasonsEl) {
-    const reasons = [
-      `Reviewed ${p.shared_files} file${p.shared_files === 1 ? '' : 's'} touched by this PR`,
-      `Reviewed ${p.recent_reviews} related PR${p.recent_reviews === 1 ? '' : 's'} in training window`,
-      p.bridge_files > 0 ? `Connected through ${p.bridge_files} co-change bridge file${p.bridge_files === 1 ? '' : 's'}` : null,
-      'Is not the PR author (no self-review)',
-      p.is_overloaded ? '⚠️ High review load (>20 recent reviews)' : 'Has available review capacity',
-    ].filter(Boolean);
-
-    primaryReasonsEl.innerHTML = reasons.map(r => `
-      <li style="display: flex; align-items: flex-start; gap: 6px;">
-        <span style="color: ${r.startsWith('⚠️') ? '#D97706' : '#16A34A'}; font-weight: 700;">✓</span>
-        <span>${escapeHtml(r)}</span>
-      </li>
-    `).join('');
-  }
-
-  // 2. Secondary Reviewer
-  const secCard = document.getElementById('secondary-reviewer-card');
-  const secNameEl = document.getElementById('rec-secondary-name');
-  const secScoreEl = document.getElementById('rec-secondary-score');
-
-  if (reviewers.length > 1) {
-    const s = reviewers[1];
-    if (secCard) secCard.style.display = 'block';
-    if (secNameEl) secNameEl.innerText = `@${s.login}`;
-    if (secScoreEl) secScoreEl.innerText = s.score.toFixed(2);
-  } else {
-    if (secCard) secCard.style.display = 'none';
-  }
-}
-
-function renderEmptyRecommendation() {
-  const primaryNameEl = document.getElementById('rec-primary-name');
-  const primaryScoreEl = document.getElementById('rec-primary-score');
-  const primaryReasonsEl = document.getElementById('rec-primary-reasons');
-  const secCard = document.getElementById('secondary-reviewer-card');
-
-  if (primaryNameEl) primaryNameEl.innerText = 'No suitable reviewer found';
-  if (primaryScoreEl) primaryScoreEl.innerText = '0.00';
-  if (primaryReasonsEl) {
-    primaryReasonsEl.innerHTML = `
-      <li style="color: #64748B;">
-        No suitable reviewer was found from the currently ingested review history.
-      </li>
-    `;
-  }
-  if (secCard) secCard.style.display = 'none';
-}
-
-function renderRiskSummary(metrics, decision) {
-  const blastBadge = document.getElementById('risk-blast-badge');
-  const flagsContainer = document.getElementById('risk-flags-container');
-
-  if (blastBadge) {
-    const tier = metrics.blast_tier || 'Standard Change';
-    blastBadge.className = tier === 'Critical Architecture' ? 'badge badge-red' :
-                           tier === 'High Risk' ? 'badge badge-amber' :
-                           tier === 'Moderate Risk' ? 'badge badge-blue' : 'badge badge-slate';
-    blastBadge.innerText = tier;
-  }
-
-  if (flagsContainer) {
-    const risks = decision.risks || [];
-    if (risks.length === 0) {
-      flagsContainer.innerHTML = '<div style="font-size: 12px; color: #16A34A;">✓ No knowledge concentration or coverage gaps detected.</div>';
+  if (alertEl && alertTextEl) {
+    if (scope.confidence_notice) {
+      alertTextEl.innerText = scope.confidence_notice;
+      alertEl.style.display = 'flex';
     } else {
-      flagsContainer.innerHTML = risks.map(r => `
-        <div style="font-size: 12px; color: #B45309; background: #FFFBEB; padding: 6px 10px; border-radius: 4px; border-left: 3px solid #D97706;">
-          <strong>${escapeHtml(r.label)}:</strong> ${escapeHtml(r.detail)}
-        </div>
-      `).join('');
+      alertEl.style.display = 'none';
     }
   }
 }
 
-// ==============================================================
-// Evidence Section Rendering
-// ==============================================================
-function renderEvidence(data) {
-  const pr = data.pr_details || {};
-  const changedFiles = pr.files || [];
-  const reviewers = data.decision?.reviewers || [];
-  const primary = reviewers.length > 0 ? reviewers[0] : null;
-  const ep = primary ? (data.reviewer_evidence?.[primary.login] || {}) : {};
+function renderPRMetadata(pr) {
+  const title = document.getElementById('pr-summary-title');
+  const author = document.getElementById('pr-summary-author');
+  const files = document.getElementById('pr-summary-files');
+  const adds = document.getElementById('pr-summary-additions');
+  const dels = document.getElementById('pr-summary-deletions');
+  const merged = document.getElementById('pr-summary-merged');
+  const badge = document.getElementById('pr-state-badge');
+
+  if (title) title.innerText = `#${pr.number || currentPrNumber}: ${pr.title || 'Untitled'}`;
+  if (author) author.innerText = `@${pr.author || 'unknown'}`;
+  if (files) files.innerText = pr.files ? pr.files.length : (pr.files_changed || 0);
+  if (adds) adds.innerText = `+${pr.additions || 0}`;
+  if (dels) dels.innerText = `-${pr.deletions || 0}`;
+  if (merged) {
+    merged.innerText = pr.merged_at
+      ? new Date(pr.merged_at).toLocaleDateString()
+      : 'Not merged (Open/Closed)';
+  }
+  if (badge) {
+    badge.innerText = pr.merged_at ? 'Merged' : (pr.state || 'Closed');
+    badge.className = pr.merged_at ? 'badge badge-green' : 'badge badge-slate';
+  }
+}
+
+function renderReviewerRecommendations(reviewers) {
+  const primary = reviewers[0];
+  const secondary = reviewers[1];
+
+  // Primary
+  const pName = document.getElementById('rec-primary-name');
+  const pScore = document.getElementById('rec-primary-score');
+  const pBadge = document.getElementById('rec-primary-score-badge');
+  const pShared = document.getElementById('rec-primary-shared');
+  const pRecent = document.getElementById('rec-primary-recent');
+  const pCov = document.getElementById('rec-primary-coverage');
+  const pLast = document.getElementById('rec-primary-last');
+  const pReasons = document.getElementById('rec-primary-reasons');
+
+  if (!primary) {
+    if (pName) pName.innerText = "No reviewer found";
+    if (pScore) pScore.innerText = "--";
+    if (pReasons) pReasons.innerHTML = '<li style="color: #64748B;">No suitable reviewer found in current review history.</li>';
+  } else {
+    if (pName) pName.innerText = `@${primary.login}`;
+    if (pScore) pScore.innerText = (primary.score * 100).toFixed(0);
+    if (pBadge) {
+      pBadge.className = primary.score >= 0.75 ? "score-badge-circle high" : "score-badge-circle medium";
+    }
+    if (pShared) pShared.innerText = `${primary.shared_files} files`;
+    if (pRecent) pRecent.innerText = `${primary.recent_reviews} PRs`;
+    if (pCov) pCov.innerText = `${primary.coverage_pct || 100}%`;
+    if (pLast) {
+      pLast.innerText = primary.days_ago !== undefined && primary.days_ago !== null
+        ? `${primary.days_ago}d ago`
+        : 'recent';
+    }
+
+    if (pReasons) {
+      const reasons = [];
+      if (primary.shared_files > 0) {
+        reasons.push(`Direct review history on ${primary.shared_files} touched files`);
+      }
+      if (primary.bridge_files > 0) {
+        reasons.push(`Connected via ${primary.bridge_files} co-change bridge files (affinity: ${primary.affinity})`);
+      }
+      if (primary.recent_reviews > 0) {
+        reasons.push(`Active contributor with ${primary.recent_reviews} recent pull request reviews`);
+      }
+      if (primary.is_overloaded) {
+        reasons.push(`Review load penalty applied (>20 recent reviews)`);
+      }
+      if (reasons.length === 0) {
+        reasons.push("Graph candidate based on directory overlap and structural betweenness");
+      }
+      pReasons.innerHTML = reasons.map(r => `
+        <li style="display: flex; align-items: flex-start; gap: 6px;">
+          <span style="color: #16A34A; font-weight: 700;">✓</span>
+          <span>${escapeHtml(r)}</span>
+        </li>
+      `).join('');
+    }
+  }
+
+  // Secondary
+  const sCard = document.getElementById('secondary-reviewer-card');
+  const sName = document.getElementById('rec-secondary-name');
+  const sScore = document.getElementById('rec-secondary-score');
+  const sDesc = document.getElementById('rec-secondary-desc');
+
+  if (!secondary) {
+    if (sCard) sCard.style.display = 'none';
+  } else {
+    if (sCard) sCard.style.display = 'block';
+    if (sName) sName.innerText = `@${secondary.login}`;
+    if (sScore) sScore.innerText = (secondary.score * 100).toFixed(0);
+    if (sDesc) {
+      sDesc.innerText = `Shares ${secondary.shared_files} files · ${secondary.recent_reviews} reviews · structural bridge: ${secondary.structural}`;
+    }
+  }
+}
+
+function renderKnowledgeRisks(risks, metrics) {
+  const badge = document.getElementById('risk-blast-badge');
+  if (badge) {
+    badge.innerText = metrics.blast_tier || 'Standard Change';
+    badge.className = `badge badge-${metrics.blast_color || 'slate'}`;
+  }
+
+  const container = document.getElementById('risk-flags-container');
+  if (!container) return;
+
+  if (risks.length === 0 && (!metrics.bus_factor_files || metrics.bus_factor_files.length === 0)) {
+    container.innerHTML = '<div style="font-size: 12px; color: #64748B;">No elevated knowledge risk flags detected for this pull request.</div>';
+    return;
+  }
+
+  let html = '';
+  // Centrality warning
+  const maxC = metrics.criticality?.max_centrality || 0;
+  if (maxC >= 0.08) {
+    html += `
+      <div style="padding: 8px 12px; background: #FFFBEB; border: 1px solid #FEF3C7; border-radius: var(--radius-sm); font-size: 12px; color: #B45309;">
+        <strong>Architectural Centrality Risk:</strong> Changed files reach ${maxC} normalised betweenness centrality.
+      </div>
+    `;
+  }
+
+  // Bus Factor Monopoly flags
+  (metrics.bus_factor_files || []).forEach(bf => {
+    html += `
+      <div style="padding: 8px 12px; background: #FEF2F2; border: 1px solid #FEE2E2; border-radius: var(--radius-sm); font-size: 12px; color: #B91C1C;">
+        <strong>Bus Factor Exposure:</strong> <code>${escapeHtml(bf.path)}</code> has single-reviewer monopoly (@${escapeHtml(bf.sole_reviewer)}).
+      </div>
+    `;
+  });
+
+  // Additional risks
+  risks.forEach(r => {
+    html += `
+      <div style="font-size: 12px; color: #475569; display: flex; align-items: center; gap: 6px;">
+        <span class="badge badge-amber font-mono">${escapeHtml(r.label || 'risk')}</span>
+        <span>${escapeHtml(r.detail || r.flag)}</span>
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+}
+
+function renderEvidenceBreakdown(data) {
+  const ep = data.explain_path || {};
+  const primary = (data.decision?.reviewers || [])[0];
+  const changedFiles = data.pr_details?.files || [];
 
   // 1. Narrative Explanation
   const narrativeEl = document.getElementById('evidence-narrative-text');
@@ -561,86 +763,433 @@ function renderEvidence(data) {
 }
 
 // ==============================================================
-// Insights, Critical Files & Bus Factor
+// PR Explorer Implementation (Server-Side Paginated & Filtered)
 // ==============================================================
-async function fetchInsights() {
-  try {
-    const data = await KeystoneAPI.getInsights(currentRepo);
-    
-    // Critical Files Table
-    const critTbody = document.getElementById('critical-files-tbody');
-    if (critTbody) {
-      const cFiles = data.critical_files || [];
-      if (cFiles.length === 0) {
-        critTbody.innerHTML = '<tr><td colspan="2" style="color: #64748B;">No precomputed centrality files available.</td></tr>';
-      } else {
-        critTbody.innerHTML = cFiles.slice(0, 10).map(f => `
-          <tr>
-            <td class="font-mono">${escapeHtml(f.path)}</td>
-            <td style="text-align: right; font-weight: 600; color: #2563EB;">${f.score.toFixed(4)}</td>
-          </tr>
-        `).join('');
-      }
-    }
+const onExplorerSearchInput = debounce(() => {
+  explorerState.page = 1;
+  const input = document.getElementById('explorer-search-input');
+  if (input) explorerState.q = input.value;
+  const authInput = document.getElementById('explorer-author-filter');
+  if (authInput) explorerState.author = authInput.value;
+  const revInput = document.getElementById('explorer-reviewer-filter');
+  if (revInput) explorerState.reviewer = revInput.value;
+  fetchExplorerPRs();
+}, 300);
 
-    // Bus Factor Table
-    const bfTbody = document.getElementById('bus-factor-tbody');
-    if (bfTbody) {
-      const bfFiles = data.bus_factor || [];
-      if (bfFiles.length === 0) {
-        bfTbody.innerHTML = '<tr><td colspan="3" style="color: #64748B;">No files exceed the 60% monopoly review threshold.</td></tr>';
-      } else {
-        bfTbody.innerHTML = bfFiles.slice(0, 10).map(b => `
-          <tr>
-            <td class="font-mono">${escapeHtml(b.path)}</td>
-            <td><strong style="color: #B45309;">@${escapeHtml(b.sole_reviewer)}</strong></td>
-            <td style="text-align: right; color: #64748B;">${b.sole_count}/${b.total} (${Math.round((b.sole_count/b.total)*100)}%)</td>
-          </tr>
-        `).join('');
-      }
-    }
-  } catch (err) {
-    console.warn("Insights fetch failed:", err);
-  }
+function onExplorerFilterChange() {
+  explorerState.page = 1;
+  explorerState.state = document.getElementById('explorer-filter-state')?.value || 'all';
+  explorerState.reviewed = document.getElementById('explorer-filter-reviewed')?.value || 'all';
+  explorerState.risk = document.getElementById('explorer-filter-risk')?.value || 'all';
+  explorerState.sort = document.getElementById('explorer-sort-by')?.value || 'number';
+  explorerState.dateFrom = document.getElementById('explorer-date-from')?.value || '';
+  explorerState.dateTo = document.getElementById('explorer-date-to')?.value || '';
+  fetchExplorerPRs();
 }
 
-async function triggerCentralityRefresh() {
-  const btn = document.getElementById('btn-recalc-centrality');
-  if (btn) {
-    btn.disabled = true;
-    btn.innerText = "Materializing...";
-  }
-  try {
-    const res = await KeystoneAPI.refreshCentrality(currentRepo);
-    notify(res.message || "Centrality materialized successfully", "success");
-    await fetchStatus();
-    await fetchInsights();
-  } catch (err) {
-    notify(err.message || "Centrality materialization failed", "error");
-  } finally {
+function resetExplorerFilters() {
+  explorerState.page = 1;
+  explorerState.q = '';
+  explorerState.state = 'all';
+  explorerState.reviewed = 'all';
+  explorerState.risk = 'all';
+  explorerState.sort = 'number';
+  explorerState.dateFrom = '';
+  explorerState.dateTo = '';
+  explorerState.author = '';
+  explorerState.reviewer = '';
+
+  const sInput = document.getElementById('explorer-search-input');
+  if (sInput) sInput.value = '';
+  const stSelect = document.getElementById('explorer-filter-state');
+  if (stSelect) stSelect.value = 'all';
+  const revSelect = document.getElementById('explorer-filter-reviewed');
+  if (revSelect) revSelect.value = 'all';
+  const rkSelect = document.getElementById('explorer-filter-risk');
+  if (rkSelect) rkSelect.value = 'all';
+  const sortSelect = document.getElementById('explorer-sort-by');
+  if (sortSelect) sortSelect.value = 'number';
+  const df = document.getElementById('explorer-date-from');
+  if (df) df.value = '';
+  const dt = document.getElementById('explorer-date-to');
+  if (dt) dt.value = '';
+  const af = document.getElementById('explorer-author-filter');
+  if (af) af.value = '';
+  const rf = document.getElementById('explorer-reviewer-filter');
+  if (rf) rf.value = '';
+
+  fetchExplorerPRs();
+}
+
+function setExplorerTab(tab) {
+  explorerState.activeTab = tab;
+  explorerState.page = 1;
+
+  ['recommended', 'all', 'gaps'].forEach(t => {
+    const btn = document.getElementById(`tab-btn-${t}`);
     if (btn) {
-      btn.disabled = false;
-      btn.innerText = "Recalculate Centrality";
+      if (t === tab) {
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+      } else {
+        btn.classList.remove('active');
+        btn.setAttribute('aria-selected', 'false');
+      }
+    }
+  });
+
+  const filterCard = document.getElementById('explorer-filter-card');
+  const tableCard = document.getElementById('explorer-table-card');
+  const gapsContainer = document.getElementById('explorer-gaps-container');
+  const viewTitle = document.getElementById('explorer-view-title');
+
+  if (tab === 'gaps') {
+    if (filterCard) filterCard.style.display = 'none';
+    if (tableCard) tableCard.style.display = 'none';
+    if (gapsContainer) gapsContainer.style.display = 'flex';
+    if (currentCoverage) renderIngestionGaps(currentCoverage);
+  } else {
+    if (filterCard) filterCard.style.display = 'block';
+    if (tableCard) tableCard.style.display = 'block';
+    if (gapsContainer) gapsContainer.style.display = 'none';
+    if (viewTitle) {
+      viewTitle.innerText = tab === 'recommended' ? 'Recommended Candidate Pull Requests' : 'All Ingested Pull Requests';
+    }
+    fetchExplorerPRs();
+  }
+}
+
+async function fetchExplorerPRs() {
+  if (explorerAbortController) {
+    explorerAbortController.abort();
+  }
+  explorerAbortController = new AbortController();
+
+  const countEl = document.getElementById('explorer-results-count');
+  if (countEl) countEl.innerText = "Searching graph...";
+
+  try {
+    const params = {
+      repo: currentRepo,
+      page: explorerState.page,
+      pageSize: explorerState.pageSize,
+      q: explorerState.q,
+      state: explorerState.state,
+      reviewed: explorerState.reviewed,
+      risk: explorerState.risk,
+      sort: explorerState.sort,
+      sort_direction: explorerState.sortDirection,
+      date_from: explorerState.dateFrom,
+      date_to: explorerState.dateTo,
+      author: explorerState.author,
+      reviewer: explorerState.reviewer,
+      view: explorerState.activeTab === 'recommended' ? 'recommended' : 'all',
+      signal: explorerAbortController.signal,
+    };
+
+    const data = await KeystoneAPI.getPRs(params);
+    const pagination = data.pagination || { page: 1, total_matching: 0, total_pages: 1 };
+    explorerState.totalPages = pagination.total_pages || 1;
+    explorerState.totalMatching = pagination.total_matching || 0;
+
+    renderExplorerTable(data.items || data.prs || []);
+    renderExplorerPagination(pagination);
+    renderScopeExplanation(data.scope || {}, data.coverage || {});
+
+    // Update top coverage showing counters
+    const covShowing = document.getElementById('cov-showing-count');
+    const covPageInfo = document.getElementById('cov-page-info');
+    const covMatching = document.getElementById('cov-matching-sub');
+    if (covShowing) covShowing.innerText = `${(data.items || []).length}`;
+    if (covPageInfo) covPageInfo.innerText = `Showing PRs · Page ${pagination.page} of ${pagination.total_pages}`;
+    if (covMatching) covMatching.innerText = `${pagination.total_matching.toLocaleString()} matching filters`;
+
+    if (countEl) countEl.innerText = `${pagination.total_matching.toLocaleString()} PRs`;
+
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.warn("Explorer search failed:", err);
+      if (countEl) countEl.innerText = "Error searching";
     }
   }
 }
 
-// ==============================================================
-// Repository Ingestion Feature
-// ==============================================================
-async function startRepositoryIngestion() {
-  const input = document.getElementById('ingest-repo-input');
-  const limitSelect = document.getElementById('ingest-limit-select');
-  const matCheck = document.getElementById('ingest-materialize-check');
+function renderExplorerTable(prs) {
+  const tbody = document.getElementById('explorer-prs-tbody');
+  if (!tbody) return;
 
-  const slug = (input.value || '').trim();
+  if (prs.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="8" style="text-align: center; color: #64748B; padding: 36px;">
+          <div>No pull requests found matching the current search criteria or active window.</div>
+          <button onclick="resetExplorerFilters()" class="btn btn-secondary btn-sm" style="margin-top: 10px;">Clear Filters</button>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = prs.map(p => {
+    const isRecommended = explorerState.activeTab === 'recommended';
+    const reasonsHtml = (p.recommendation_reasons && p.recommendation_reasons.length > 0)
+      ? `<div style="font-size: 11px; color: #2563EB; margin-top: 4px;">• ${escapeHtml(p.recommendation_reasons[0])}</div>`
+      : '';
+
+    return `
+      <tr>
+        <td class="font-mono">
+          <a href="javascript:void(0)" onclick="selectAndAnalyzePR(${p.number})" style="color: #2563EB; font-weight: 700; text-decoration: none;">
+            #${p.number}
+          </a>
+        </td>
+        <td>
+          <div style="font-weight: 600; color: #0F172A;">${escapeHtml(p.title)}</div>
+          ${reasonsHtml}
+        </td>
+        <td class="font-mono" style="color: #475569;">@${escapeHtml(p.author)}</td>
+        <td style="color: #64748B; font-size: 11px;">
+          ${p.merged_at ? new Date(p.merged_at).toLocaleDateString() : (p.state || 'closed')}
+        </td>
+        <td style="text-align: center; font-weight: 600;">${p.file_count || 0}</td>
+        <td style="text-align: center;">
+          <span class="badge ${p.is_reviewed ? 'badge-green' : 'badge-slate'}">
+            ${p.reviewer_count || 0} revs
+          </span>
+        </td>
+        <td>
+          <span class="badge badge-${p.risk_color || 'slate'}">
+            ${escapeHtml(p.risk_tier || 'Standard')}
+          </span>
+        </td>
+        <td style="text-align: right;">
+          <button onclick="selectAndAnalyzePR(${p.number})" class="btn btn-primary btn-sm" style="font-size: 11px; padding: 4px 8px;">
+            Analyze ›
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function selectAndAnalyzePR(prNumber) {
+  currentPrNumber = prNumber;
+  const directInput = document.getElementById('pr-direct-input');
+  if (directInput) directInput.value = prNumber;
+  const dropdown = document.getElementById('pr-select-dropdown');
+  if (dropdown) dropdown.value = prNumber;
+
+  switchMainSection('routing');
+  runInvestigation(prNumber);
+}
+
+function renderExplorerPagination(pagination) {
+  const firstBtn = document.getElementById('btn-exp-first');
+  const prevBtn = document.getElementById('btn-exp-prev');
+  const nextBtn = document.getElementById('btn-exp-next');
+  const lastBtn = document.getElementById('btn-exp-last');
+  const label = document.getElementById('explorer-pagination-summary');
+
+  const page = pagination.page || 1;
+  const pages = pagination.total_pages || 1;
+  const total = pagination.total_matching || 0;
+
+  if (firstBtn) firstBtn.disabled = page <= 1;
+  if (prevBtn) prevBtn.disabled = page <= 1;
+  if (nextBtn) nextBtn.disabled = page >= pages;
+  if (lastBtn) lastBtn.disabled = page >= pages;
+
+  if (label) {
+    label.innerText = `Page ${page} of ${pages} (${total.toLocaleString()} total matching PRs)`;
+  }
+}
+
+function changeExplorerPageDelta(delta) {
+  explorerState.page = Math.max(1, Math.min(explorerState.page + delta, explorerState.totalPages));
+  fetchExplorerPRs();
+}
+
+function changeExplorerPageTo(page) {
+  explorerState.page = page;
+  fetchExplorerPRs();
+}
+
+function changeExplorerPageLast() {
+  explorerState.page = explorerState.totalPages;
+  fetchExplorerPRs();
+}
+
+function changeExplorerPageSize(newSize) {
+  explorerState.pageSize = parseInt(newSize, 10) || 25;
+  explorerState.page = 1;
+  fetchExplorerPRs();
+}
+
+function renderScopeExplanation(scope, coverage) {
+  const whyRepo = document.getElementById('why-repo-name');
+  const whyScope = document.getElementById('why-active-scope');
+  const whyWin = document.getElementById('why-analysis-window');
+  const whyExclusions = document.getElementById('why-exclusions-text');
+
+  if (whyRepo) whyRepo.innerText = currentRepo;
+  if (whyScope) whyScope.innerText = scope.explanation || "Displaying matching pull requests from FalkorDB graph.";
+  if (whyWin) whyWin.innerText = coverage.analysis_window?.label || "Last 90 days";
+
+  if (whyExclusions) {
+    const ghTotal = coverage.github_total || currentCoverage?.counts?.github_total;
+    const ingTotal = coverage.ingested || currentCoverage?.counts?.ingested || 0;
+    if (ghTotal && ghTotal > ingTotal) {
+      whyExclusions.innerText = `• Exclusions: ${(ghTotal - ingTotal).toLocaleString()} older PRs available on GitHub have not been ingested into Keystone yet.`;
+      whyExclusions.style.display = 'block';
+    } else {
+      whyExclusions.style.display = 'none';
+    }
+  }
+}
+
+function renderIngestionGaps(cov) {
+  const grid = document.getElementById('gaps-cards-grid');
+  if (!grid || !cov) return;
+
+  const gaps = cov.gaps || {};
+  const counts = cov.counts || {};
+
+  grid.innerHTML = `
+    <!-- Discovered Not Ingested -->
+    <div class="gap-category-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <strong style="color: #0F172A; font-size: 14px;">1. Discovered but Not Ingested</strong>
+        <span class="badge badge-amber font-mono">${(gaps.discovered_not_ingested?.count || 0).toLocaleString()} PRs</span>
+      </div>
+      <p style="font-size: 12px; color: #475569; line-height: 1.4;">
+        ${escapeHtml(gaps.discovered_not_ingested?.explanation || "Older PRs identified on GitHub but not yet imported into the knowledge graph.")}
+      </p>
+      <div style="font-size: 11px; color: #64748B;">Date Range: ${escapeHtml(cov.date_ranges?.earliest_discovered?.slice(0, 10) || '2017-06-01')} to ${escapeHtml(cov.date_ranges?.earliest_ingested?.slice(0, 10) || 'Recent')}</div>
+      <button onclick="switchMainSection('health'); document.getElementById('scope-card-all_merged').click();" class="btn btn-secondary btn-sm" style="margin-top: 6px;">
+        Ingest Older History
+      </button>
+    </div>
+
+    <!-- Outside Active Analysis Window -->
+    <div class="gap-category-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <strong style="color: #0F172A; font-size: 14px;">2. Outside Active Window</strong>
+        <span class="badge badge-slate font-mono">${(gaps.outside_active_window?.count || 0).toLocaleString()} PRs</span>
+      </div>
+      <p style="font-size: 12px; color: #475569; line-height: 1.4;">
+        ${escapeHtml(gaps.outside_active_window?.explanation || "PRs merged earlier than the 90-day active window. Retained in graph but excluded from active reviewer routing to ensure recency.")}
+      </p>
+      <div style="font-size: 11px; color: #64748B;">Active Window Cutoff: ${escapeHtml(cov.analysis_window?.start?.slice(0, 10) || '90 days ago')}</div>
+    </div>
+
+    <!-- Missing Review Data -->
+    <div class="gap-category-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <strong style="color: #0F172A; font-size: 14px;">3. Missing Peer Review Data</strong>
+        <span class="badge badge-blue font-mono">${(gaps.missing_review_history?.count || counts.unreviewed || 0).toLocaleString()} PRs</span>
+      </div>
+      <p style="font-size: 12px; color: #475569; line-height: 1.4;">
+        ${escapeHtml(gaps.missing_review_history?.explanation || "Merged without peer review records. Excluded from training to prevent false expertise assumptions.")}
+      </p>
+      <div style="font-size: 11px; color: #64748B;">Impact: Surface knowledge risks and coverage gaps in PR Explorer.</div>
+    </div>
+
+    <!-- Failed Ingestion Records -->
+    <div class="gap-category-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <strong style="color: #0F172A; font-size: 14px;">4. Failed During Ingestion</strong>
+        <span class="badge ${counts.failed > 0 ? 'badge-red' : 'badge-green'} font-mono">${counts.failed || 0} PRs</span>
+      </div>
+      <p style="font-size: 12px; color: #475569; line-height: 1.4;">
+        ${escapeHtml(gaps.failed_ingestion?.explanation || "PRs that hit GitHub rate limits, HTTP 403, or database timeouts.")}
+      </p>
+      ${counts.failed > 0 ? `
+        <button onclick="switchMainSection('health'); document.getElementById('scope-card-resume').click();" class="btn btn-danger btn-sm" style="margin-top: 6px;">
+          Retry Failed Records
+        </button>
+      ` : '<div style="font-size: 11px; color: #16A34A;">✓ Zero recorded failures</div>'}
+    </div>
+  `;
+}
+
+// ==============================================================
+// Ingestion Scope Controls & Pre-Flight Confirmation
+// ==============================================================
+function onScopeTypeChange(scopeType) {
+  selectedScopeType = scopeType;
+  ['recent', 'date_range', 'all_merged', 'resume'].forEach(t => {
+    const card = document.getElementById(`scope-card-${t}`);
+    if (card) {
+      if (t === scopeType) {
+        card.classList.add('selected');
+      } else {
+        card.classList.remove('selected');
+      }
+    }
+  });
+
+  const rangeContainer = document.getElementById('ingest-date-range-container');
+  const limitContainer = document.getElementById('ingest-limit-container');
+
+  if (rangeContainer) rangeContainer.style.display = (scopeType === 'date_range') ? 'flex' : 'none';
+  if (limitContainer) limitContainer.style.display = (scopeType === 'date_range' || scopeType === 'all_merged') ? 'none' : 'block';
+}
+
+async function previewIngestionConfirmation() {
+  const input = document.getElementById('ingest-repo-input');
+  const slug = (input?.value || '').trim();
   if (!slug || !slug.includes('/')) {
     notify("Please enter repository in owner/name format (e.g. pydantic/pydantic)", "error");
     return;
   }
 
-  const limit = parseInt(limitSelect.value, 10) || 100;
-  const materialize = matCheck.checked;
+  const limitSelect = document.getElementById('ingest-limit-select');
+  const limit = parseInt(limitSelect?.value || '100', 10);
+  const dateFrom = document.getElementById('ingest-date-from')?.value || null;
+  const dateTo = document.getElementById('ingest-date-to')?.value || null;
+
+  try {
+    const est = await KeystoneAPI.estimateIngestion(slug, selectedScopeType, limit, dateFrom, dateTo);
+    
+    const card = document.getElementById('scope-confirmation-card');
+    if (!card) return;
+
+    document.getElementById('conf-repo-slug').innerText = est.repo;
+    document.getElementById('conf-scope-desc').innerText = est.requested_scope;
+    document.getElementById('conf-est-prs').innerText = Number(est.estimated_prs).toLocaleString();
+    document.getElementById('conf-est-requests').innerText = `~${Number(est.estimated_github_api_requests).toLocaleString()} calls`;
+    document.getElementById('conf-est-size').innerText = est.expected_graph_size;
+    document.getElementById('conf-est-limits').innerText = est.estimated_limitation;
+
+    card.style.display = 'block';
+    card.scrollIntoView({ behavior: 'smooth' });
+
+  } catch (err) {
+    notify(err.message || "Failed to estimate scope", "error");
+  }
+}
+
+async function startRepositoryIngestionConfirmed() {
+  const card = document.getElementById('scope-confirmation-card');
+  if (card) card.style.display = 'none';
+  await startRepositoryIngestion();
+}
+
+async function startRepositoryIngestion() {
+  const input = document.getElementById('ingest-repo-input');
+  const limitSelect = document.getElementById('ingest-limit-select');
+  const matCheck = document.getElementById('ingest-materialize-check');
+
+  const slug = (input?.value || '').trim();
+  if (!slug || !slug.includes('/')) {
+    notify("Please enter repository in owner/name format (e.g. pydantic/pydantic)", "error");
+    return;
+  }
+
+  const limit = parseInt(limitSelect?.value || '100', 10);
+  const materialize = matCheck ? matCheck.checked : true;
+  const dateFrom = document.getElementById('ingest-date-from')?.value || null;
+  const dateTo = document.getElementById('ingest-date-to')?.value || null;
 
   const btn = document.getElementById('btn-start-ingest');
   if (btn) {
@@ -649,9 +1198,9 @@ async function startRepositoryIngestion() {
   }
 
   try {
-    const res = await KeystoneAPI.startIngestion(slug, limit, materialize);
+    const res = await KeystoneAPI.startIngestion(slug, limit, materialize, selectedScopeType, dateFrom, dateTo);
     activeIngestJobId = res.job_id;
-    notify(`Ingestion job ${res.job_id} started for ${slug}`, "info");
+    notify(`Ingestion job ${res.job_id} queued for ${slug}`, "info");
 
     showIngestionStatus(res.job);
     startIngestionPolling(activeIngestJobId);
@@ -675,6 +1224,10 @@ function showIngestionStatus(job) {
   document.getElementById('ingest-count-prs').innerText = job.prs_processed;
   document.getElementById('ingest-count-files').innerText = job.files_processed;
   document.getElementById('ingest-count-reviews').innerText = job.reviews_processed;
+  const failedCountEl = document.getElementById('ingest-count-failed');
+  if (failedCountEl) failedCountEl.innerText = job.failed_count || 0;
+  const skippedCountEl = document.getElementById('ingest-count-skipped');
+  if (skippedCountEl) skippedCountEl.innerText = job.skipped_count || 0;
   document.getElementById('ingest-count-page').innerText = job.current_page;
 
   const pct = Math.min(100, Math.round((job.prs_processed / Math.max(1, job.target_limit)) * 100));
@@ -716,6 +1269,8 @@ function startIngestionPolling(jobId) {
         notify(`Ingestion ${job.status.toLowerCase()}: ${job.prs_processed} PRs processed.`, job.status.includes('COMPLETED') ? 'success' : 'error');
         fetchRegisteredRepositories();
         fetchStatus();
+        fetchRepositoryCoverage(currentRepo);
+        fetchExplorerPRs();
       }
     } catch (e) {
       console.warn("Ingest status poll error:", e);
@@ -751,52 +1306,68 @@ function onModeChange(mode) {
   ['dryrun', 'shadow', 'live'].forEach(m => {
     const el = document.getElementById(`mode-label-${m}`);
     if (el) {
-      if (m.toUpperCase() === mode) {
+      if (m.toUpperCase() === mode.replace('_', '')) {
         el.style.border = '2px solid var(--accent-primary)';
-        el.style.backgroundColor = '#EFF6FF';
+        el.style.background = '#EFF6FF';
       } else {
         el.style.border = '1px solid var(--border)';
-        el.style.backgroundColor = '#FFFFFF';
+        el.style.background = 'transparent';
       }
     }
   });
 
-  const liveConfirmBox = document.getElementById('live-confirmation-container');
-  if (liveConfirmBox) {
-    liveConfirmBox.style.display = mode === 'LIVE' ? 'block' : 'none';
+  const confirmContainer = document.getElementById('live-confirmation-container');
+  if (confirmContainer) {
+    confirmContainer.style.display = (mode === 'LIVE') ? 'block' : 'none';
   }
 }
 
 function scrollToDispatch() {
-  const card = document.getElementById('dispatch-card');
-  if (card) {
-    card.scrollIntoView({ behavior: 'smooth' });
-    card.style.boxShadow = '0 0 0 2px var(--accent-primary)';
-    setTimeout(() => { card.style.boxShadow = 'var(--shadow-sm)'; }, 1500);
+  const el = document.getElementById('dispatch-card');
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth' });
+    el.style.boxShadow = '0 0 0 3px rgba(37, 99, 235, 0.4)';
+    setTimeout(() => { el.style.boxShadow = 'var(--shadow-sm)'; }, 1500);
+  }
+}
+
+function updateProposedAction(reviewers) {
+  const targetLabel = document.getElementById('action-target-label');
+  if (!targetLabel) return;
+  if (!reviewers || reviewers.length === 0) {
+    targetLabel.innerText = "no candidate";
+  } else {
+    targetLabel.innerText = `@${reviewers[0].login}`;
   }
 }
 
 async function dispatchAction() {
-  if (!currentResult || !currentResult.proposed_actions || currentResult.proposed_actions.length === 0) {
-    notify("No proposed actions to dispatch for this PR", "error");
-    return;
-  }
-
-  const action = currentResult.proposed_actions[0];
-  const isLive = selectedDispatchMode === 'LIVE';
-  const confirmed = isLive ? document.getElementById('live-confirm-checkbox')?.checked : false;
-
-  if (isLive && !confirmed) {
-    notify("Please confirm before executing live GitHub actions", "error");
-    return;
-  }
-
-  const idempotencyKey = `idemp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const btn = document.getElementById('btn-dispatch-action');
   if (btn) btn.disabled = true;
 
   try {
-    const res = await KeystoneAPI.executeAction(action, currentRepo, currentPrNumber, selectedDispatchMode, confirmed, idempotencyKey);
+    const mode = selectedDispatchMode;
+    const isLive = mode === 'LIVE';
+    const confirmed = isLive ? (document.getElementById('live-confirm-checkbox')?.checked || false) : false;
+
+    if (isLive && !confirmed) {
+      notify("Please confirm dispatching live action by checking the authorization box", "error");
+      return;
+    }
+
+    const primaryReviewer = currentResult?.decision?.reviewers?.[0];
+    if (!primaryReviewer) {
+      notify("No recommended reviewer found to dispatch", "error");
+      return;
+    }
+
+    const action = {
+      action: "request_review",
+      who: primaryReviewer.login,
+      on: currentPrNumber,
+    };
+
+    const res = await KeystoneAPI.executeAction(action, currentRepo, currentPrNumber, mode, confirmed);
     const entry = res.entry || {};
     notify(`Action recorded (${entry.status}) in ${entry.mode} mode`, entry.mode === 'FAILED' ? 'error' : 'success');
     await fetchLedger();
@@ -868,6 +1439,71 @@ async function clearActionLedger() {
     await fetchLedger();
   } catch (err) {
     notify("Could not clear ledger", "error");
+  }
+}
+
+// ==============================================================
+// Insights, Critical Files & Bus Factor
+// ==============================================================
+async function fetchInsights() {
+  try {
+    const data = await KeystoneAPI.getInsights(currentRepo);
+    
+    // Critical Files Table
+    const critTbody = document.getElementById('critical-files-tbody');
+    if (critTbody) {
+      const cFiles = data.critical_files || [];
+      if (cFiles.length === 0) {
+        critTbody.innerHTML = '<tr><td colspan="2" style="color: #64748B;">No precomputed centrality files available.</td></tr>';
+      } else {
+        critTbody.innerHTML = cFiles.slice(0, 10).map(f => `
+          <tr>
+            <td class="font-mono">${escapeHtml(f.path)}</td>
+            <td style="text-align: right; font-weight: 600; color: #2563EB;">${f.score.toFixed(4)}</td>
+          </tr>
+        `).join('');
+      }
+    }
+
+    // Bus Factor Table
+    const bfTbody = document.getElementById('bus-factor-tbody');
+    if (bfTbody) {
+      const bfFiles = data.bus_factor || [];
+      if (bfFiles.length === 0) {
+        bfTbody.innerHTML = '<tr><td colspan="3" style="color: #64748B;">No files exceed the 60% monopoly review threshold.</td></tr>';
+      } else {
+        bfTbody.innerHTML = bfFiles.slice(0, 10).map(b => `
+          <tr>
+            <td class="font-mono">${escapeHtml(b.path)}</td>
+            <td><strong style="color: #B45309;">@${escapeHtml(b.sole_reviewer)}</strong></td>
+            <td style="text-align: right; color: #64748B;">${b.sole_count}/${b.total} (${Math.round((b.sole_count/b.total)*100)}%)</td>
+          </tr>
+        `).join('');
+      }
+    }
+  } catch (err) {
+    console.warn("Insights fetch failed:", err);
+  }
+}
+
+async function triggerCentralityRefresh() {
+  const btn = document.getElementById('btn-recalc-centrality');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = "Materializing...";
+  }
+  try {
+    const res = await KeystoneAPI.refreshCentrality(currentRepo);
+    notify(res.message || "Centrality materialized successfully", "success");
+    await fetchStatus();
+    await fetchInsights();
+  } catch (err) {
+    notify(err.message || "Centrality materialization failed", "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = "Recalculate Centrality";
+    }
   }
 }
 

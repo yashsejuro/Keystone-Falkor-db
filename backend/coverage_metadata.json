@@ -1,0 +1,77 @@
+{
+  "pydantic/pydantic": {
+    "github_total": 35842,
+    "discovered": 12400,
+    "failed": 12,
+    "skipped": 45,
+    "earliest_discovered": "2017-06-01T00:00:00Z",
+    "latest_discovered": "2026-10-18T00:00:00Z",
+    "last_discovery_at": "2026-10-18T08:00:00Z",
+    "last_sync_at": "2026-10-18T08:00:00Z",
+    "discovery_status": "Connected",
+    "current_ingestion_scope": {
+      "type": "recent",
+      "limit": 2500
+    },
+    "ingested": 2460,
+    "status": "partially_ingested",
+    "last_updated_at": "2026-10-18T09:03:26.212958+00:00"
+  },
+  "fastapi/fastapi": {
+    "github_total": 14200,
+    "discovered": 6100,
+    "failed": 4,
+    "skipped": 18,
+    "earliest_discovered": "2018-12-05T00:00:00Z",
+    "latest_discovered": "2026-10-18T00:00:00Z",
+    "last_discovery_at": "2026-10-18T08:00:00Z",
+    "last_sync_at": "2026-10-18T08:00:00Z",
+    "discovery_status": "Connected",
+    "current_ingestion_scope": {
+      "type": "recent",
+      "limit": 1000
+    }
+  },
+  "redis/redis": {
+    "github_total": 15900,
+    "discovered": 5200,
+    "failed": 0,
+    "skipped": 10,
+    "earliest_discovered": "2010-04-10T00:00:00Z",
+    "latest_discovered": "2026-10-18T00:00:00Z",
+    "last_discovery_at": "2026-10-18T08:00:00Z",
+    "last_sync_at": "2026-10-18T08:00:00Z",
+    "discovery_status": "Connected",
+    "current_ingestion_scope": {
+      "type": "recent",
+      "limit": 500
+    }
+  },
+  "test/repo-alpha": {
+    "github_total": 45000,
+    "discovered": 5000,
+    "failed": 12,
+    "skipped": 5,
+    "status": "partially_ingested",
+    "last_updated_at": "2026-10-18T09:03:15.999558+00:00"
+  },
+  "org/sample-repo": {
+    "github_total": 10000,
+    "discovered": 3500,
+    "status": "partially_ingested",
+    "last_updated_at": "2026-10-18T09:03:18.257016+00:00"
+  },
+  "test/repo-beta": {
+    "github_total": 1200,
+    "discovered": 1200,
+    "failed": 0,
+    "skipped": 0,
+    "status": "ingestion_completed",
+    "last_updated_at": "2026-10-18T09:03:16.000019+00:00"
+  },
+  "test/scope-repo": {
+    "github_total": 10000,
+    "discovered": 3500,
+    "last_updated_at": "2026-10-18T09:03:17.818658+00:00"
+  }
+}

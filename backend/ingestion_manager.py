@@ -29,6 +29,7 @@ try:
         graph_provenance, REPOS, REPO_SLUGS
     )
     from backend.centrality import materialize_centrality
+    from backend.coverage import get_repository_coverage, update_coverage_metadata
 except ImportError:
     from graph_client import (
         register_repo, get_graph, execute_graph_query,
@@ -36,17 +37,23 @@ except ImportError:
         graph_provenance, REPOS, REPO_SLUGS
     )
     from centrality import materialize_centrality
+    from coverage import get_repository_coverage, update_coverage_metadata
 
 logger = logging.getLogger("keystone.ingestion")
 
 
 class IngestionJob:
     def __init__(self, job_id: str, repo_slug: str, target_limit: int = 100,
-                 materialize_centrality_flag: bool = True):
+                 materialize_centrality_flag: bool = True,
+                 scope_type: str = "recent", date_from: Optional[str] = None,
+                 date_to: Optional[str] = None):
         self.job_id = job_id
         self.repo_slug = repo_slug
         self.target_limit = target_limit
         self.materialize_centrality_flag = materialize_centrality_flag
+        self.scope_type = scope_type
+        self.date_from = date_from
+        self.date_to = date_to
         self.graph_name = ""
         self.status = "QUEUED"  # QUEUED, IN_PROGRESS, COMPLETED, FAILED, CANCELLED, PARTIALLY_COMPLETED
         self.prs_processed = 0
@@ -58,6 +65,10 @@ class IngestionJob:
         self.end_time: Optional[str] = None
         self.error: Optional[str] = None
         self.is_cancelled = False
+        self.failed_prs: list[dict] = []
+        self.skipped_prs = 0
+        self.github_total: Optional[int] = None
+        self.scope_description: str = ""
         self._lock = threading.Lock()
 
     def update_progress(self, pr_inc: int = 0, file_inc: int = 0, rev_inc: int = 0, page: Optional[int] = None):
@@ -68,6 +79,18 @@ class IngestionJob:
             if page is not None:
                 self.current_page = page
             self.updated_time = datetime.now(timezone.utc).isoformat()
+
+    def record_failure(self, pr_num: int, reason: str):
+        with self._lock:
+            self.failed_prs.append({
+                "pr": pr_num,
+                "reason": reason,
+                "time": datetime.now(timezone.utc).isoformat()
+            })
+
+    def record_skipped(self, count: int = 1):
+        with self._lock:
+            self.skipped_prs += count
 
     def set_status(self, status: str, error: Optional[str] = None):
         with self._lock:
@@ -93,10 +116,18 @@ class IngestionJob:
                 "repo_slug": self.repo_slug,
                 "graph_name": self.graph_name,
                 "status": self.status,
+                "scope_type": self.scope_type,
+                "date_from": self.date_from,
+                "date_to": self.date_to,
+                "scope_description": self.scope_description,
                 "prs_processed": self.prs_processed,
                 "target_limit": self.target_limit,
                 "files_processed": self.files_processed,
                 "reviews_processed": self.reviews_processed,
+                "failed_count": len(self.failed_prs),
+                "failed_prs": self.failed_prs[-10:],
+                "skipped_count": self.skipped_prs,
+                "github_total": self.github_total,
                 "current_page": self.current_page,
                 "start_time": self.start_time,
                 "updated_time": self.updated_time,
@@ -138,7 +169,9 @@ class IngestionJobManager:
             return False
 
     def start_job(self, repo_slug: str, target_limit: int = 100,
-                  materialize_centrality_flag: bool = True) -> IngestionJob:
+                  materialize_centrality_flag: bool = True,
+                  scope_type: str = "recent", date_from: Optional[str] = None,
+                  date_to: Optional[str] = None) -> IngestionJob:
         clean_slug = repo_slug.strip()
         match = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", clean_slug)
         if not match:
@@ -153,7 +186,10 @@ class IngestionJobManager:
                     raise RuntimeError(f"An ingestion job for repository '{clean_slug}' is already in progress.")
 
             job_id = f"ingest-{uuid.uuid4().hex[:8]}"
-            job = IngestionJob(job_id, clean_slug, target_limit, materialize_centrality_flag)
+            job = IngestionJob(
+                job_id, clean_slug, target_limit, materialize_centrality_flag,
+                scope_type=scope_type, date_from=date_from, date_to=date_to
+            )
             self._jobs[job_id] = job
             self._active_repos[normalized] = job_id
 
@@ -168,6 +204,11 @@ class IngestionJobManager:
             return False
         job.cancel()
         return True
+
+    def estimate_scope(self, repo_slug: str, scope_type: str = "recent",
+                       limit: int = 100, date_from: Optional[str] = None,
+                       date_to: Optional[str] = None) -> dict:
+        return estimate_ingestion_scope(repo_slug, scope_type, limit, date_from, date_to)
 
     def _build_github_session(self) -> requests.Session:
         token = os.getenv("GITHUB_TOKEN", "").strip()
@@ -231,6 +272,20 @@ class IngestionJobManager:
             if job.is_cancelled:
                 job.set_status("CANCELLED")
                 return
+
+            # Discover GitHub universe PR count
+            search_data, _, _ = self._fetch_github_json(
+                session,
+                "https://api.github.com/search/issues",
+                {"q": f"repo:{job.repo_slug} is:pr", "per_page": 1}
+            )
+            if search_data and isinstance(search_data, dict) and "total_count" in search_data:
+                job.github_total = int(search_data["total_count"])
+                update_coverage_metadata(job.repo_slug, {
+                    "github_total": job.github_total,
+                    "discovery_status": "Connected",
+                    "last_discovery_at": datetime.now(timezone.utc).isoformat(),
+                })
 
             # 2. Register repository safely in multi-tenant graph registry
             graph_key = register_repo(job.repo_slug)
@@ -296,20 +351,33 @@ class IngestionJobManager:
                     merged_at = pr_data.get("merged_at")
                     # Ingest only merged PRs
                     if not merged_at:
+                        job.record_skipped(1)
+                        continue
+
+                    # Date filtering
+                    if job.date_from and str(merged_at) < job.date_from:
+                        job.record_skipped(1)
+                        continue
+                    if job.date_to and str(merged_at) > job.date_to:
+                        job.record_skipped(1)
                         continue
 
                     if pr_num in existing_pr_set:
                         continue
 
-                    # Fetch changed files and reviews with pagination
-                    files = self._fetch_all_pr_files(session, job.repo_slug, pr_num)
-                    reviews = self._fetch_all_pr_reviews(session, job.repo_slug, pr_num)
+                    try:
+                        # Fetch changed files and reviews with pagination
+                        files = self._fetch_all_pr_files(session, job.repo_slug, pr_num)
+                        reviews = self._fetch_all_pr_reviews(session, job.repo_slug, pr_num)
 
-                    # Ingest single PR atomically with batched Cypher writes
-                    self._ingest_single_pr_batch(graph_key, pr_data, files, reviews)
-                    existing_pr_set.add(pr_num)
-                    added_prs += 1
-                    job.update_progress(pr_inc=1, file_inc=len(files), rev_inc=len(reviews), page=page)
+                        # Ingest single PR atomically with batched Cypher writes
+                        self._ingest_single_pr_batch(graph_key, pr_data, files, reviews)
+                        existing_pr_set.add(pr_num)
+                        added_prs += 1
+                        job.update_progress(pr_inc=1, file_inc=len(files), rev_inc=len(reviews), page=page)
+                    except Exception as pr_err:
+                        logger.warning(f"Error ingesting PR #{pr_num}: {pr_err}")
+                        job.record_failure(pr_num, str(pr_err))
 
                     if added_prs >= job.target_limit:
                         break
@@ -347,6 +415,24 @@ class IngestionJobManager:
                 logger.info(f"[{job.job_id}] Ingestion finished with status {final_status}. Added {added_prs} PRs.")
             else:
                 job.set_status("COMPLETED")
+
+            # Update repository coverage metadata
+            try:
+                update_coverage_metadata(job.repo_slug, {
+                    "ingested": len(existing_pr_set),
+                    "failed": len(job.failed_prs),
+                    "skipped": job.skipped_prs,
+                    "last_sync_at": now_iso,
+                    "ingestion_status": "Ingestion completed" if added_prs >= job.target_limit or not has_more else "Partially ingested",
+                    "current_ingestion_scope": {
+                        "type": job.scope_type,
+                        "limit": job.target_limit,
+                        "date_from": job.date_from,
+                        "date_to": job.date_to,
+                    }
+                })
+            except Exception as cov_err:
+                logger.warning(f"Failed to update coverage after ingestion: {cov_err}")
 
         except Exception as e:
             logger.error(f"[{job.job_id}] Unexpected error during ingestion: {e}", exc_info=True)
@@ -489,8 +575,81 @@ class IngestionJobManager:
             execute_graph_query(reviews_query, {"num": pr_num, "reviews": clean_reviews}, repo=graph_key)
 
 
+def estimate_ingestion_scope(repo_slug: str, scope_type: str = "recent",
+                             limit: int = 100, date_from: Optional[str] = None,
+                             date_to: Optional[str] = None) -> dict:
+    """Pre-flight estimator for requested ingestion scope.
+    
+    Returns requested scope description, estimated PRs, estimated GitHub API requests,
+    expected graph size, and rate limit warnings.
+    """
+    clean_slug = repo_slug.strip()
+    match = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", clean_slug)
+    if not match:
+        raise ValueError(f"Invalid repository slug '{repo_slug}'. Format must be owner/name (e.g. 'pydantic/pydantic').")
+
+    # Auto-register if unknown so estimate can run for arbitrary repo slugs
+    try:
+        from backend.graph_client import register_repo
+    except ImportError:
+        from graph_client import register_repo
+    register_repo(clean_slug)
+
+    try:
+        coverage = get_repository_coverage(clean_slug)
+        github_total = coverage.get("counts", {}).get("github_total")
+    except Exception:
+        coverage = {}
+        github_total = None
+
+    if scope_type == "recent":
+        est_prs = min(limit or 100, github_total or limit or 100)
+        desc = f"Latest {est_prs} merged PRs"
+    elif scope_type == "date_range":
+        desc = f"Merged PRs from {date_from or 'repository inception'} to {date_to or 'present'}"
+        est_prs = limit or 500
+    elif scope_type == "all_merged":
+        desc = "All available merged PRs"
+        est_prs = github_total or 1000
+    elif scope_type == "resume":
+        desc = "Resume incomplete ingestion from current cursor"
+        est_prs = 100
+    elif scope_type == "refresh_newer":
+        desc = "Refresh only newer PRs merged since last sync"
+        est_prs = 50
+    else:
+        desc = f"Ingest up to {limit} PRs"
+        est_prs = limit
+
+    est_requests = max(1, int(est_prs * 2.2) + (est_prs // 50) + 2)
+    est_elements = est_prs * 24
+
+    limitation_text = (
+        "GitHub API limits authenticated users to 5,000 requests/hour and unauthenticated users to 60/hour. "
+        "Rate limits may affect completion time for large scopes."
+    )
+
+    return {
+        "repo": clean_slug,
+        "scope_type": scope_type,
+        "date_from": date_from,
+        "date_to": date_to,
+        "requested_scope": desc,
+        "estimated_prs": est_prs,
+        # Both keys provided for API compatibility
+        "estimated_api_requests": est_requests,
+        "estimated_github_api_requests": est_requests,
+        "estimated_nodes_and_edges": est_elements,
+        "expected_graph_size": f"Approximately {est_elements:,} nodes and relationships",
+        "estimated_limitations": limitation_text,
+        "estimated_limitation": limitation_text,
+        "github_total": github_total,
+        "current_ingested": coverage.get("counts", {}).get("ingested", 0),
+    }
+
+
 def get_registered_repositories() -> list[dict]:
-    """Return comprehensive list of registered repositories with graph metadata and freshness."""
+    """Return comprehensive list of registered repositories with graph metadata, coverage counts, and freshness."""
     results = []
     seen_graphs = set()
 
@@ -501,15 +660,30 @@ def get_registered_repositories() -> list[dict]:
         seen_graphs.add(graph_name)
 
         try:
+            cov = get_repository_coverage(key)
+            cov_counts = cov.get("counts", {})
+            cov_statuses = cov.get("statuses", {})
+            cov_ranges = cov.get("date_ranges", {})
+            last_sync = cov.get("last_synced_at")
+        except Exception:
+            cov = {}
+            cov_counts = {}
+            cov_statuses = {}
+            cov_ranges = {}
+            last_sync = None
+
+        try:
             nodes = node_count(key)
             edges = edge_count(key)
             prov = graph_provenance(key)
             status = "ready" if nodes > 0 else "empty"
-        except Exception:
+            err_info = None
+        except Exception as e:
             nodes = 0
             edges = 0
             prov = {"status": "unavailable", "message": "FalkorDB unreachable"}
             status = "offline"
+            err_info = str(e)
 
         results.append({
             "key": key,
@@ -519,6 +693,34 @@ def get_registered_repositories() -> list[dict]:
             "edges": edges,
             "status": status,
             "provenance": prov,
+            "discovery_status": cov_statuses.get("discovery", "Connected"),
+            "ingestion_status": cov_statuses.get("ingestion", "Partially ingested" if nodes > 0 else "Not connected"),
+            "analysis_status": cov_statuses.get("analysis", "Analysis ready" if nodes > 0 else "Insufficient history"),
+            # Top-level coverage dict for API test compatibility
+            "coverage": {
+                "github_total": cov_counts.get("github_total"),
+                "discovered": cov_counts.get("discovered", nodes),
+                "ingested": cov_counts.get("ingested", nodes),
+                "analysis_ready": cov_counts.get("analysis_ready", 0),
+            },
+            # Also available as coverage_counts for backward compat
+            "coverage_counts": {
+                "github_total": cov_counts.get("github_total"),
+                "discovered": cov_counts.get("discovered", nodes),
+                "ingested": cov_counts.get("ingested", nodes),
+                "analysis_ready": cov_counts.get("analysis_ready", 0),
+            },
+            # Top-level statuses dict for API test compatibility
+            "statuses": cov_statuses if cov_statuses else {
+                "discovery": "Connected",
+                "ingestion": "Partially ingested" if nodes > 0 else "Not connected",
+                "analysis": "Analysis ready" if nodes > 0 else "Insufficient history",
+                "freshness": "Fresh",
+            },
+            "date_coverage": cov_ranges,
+            "freshness": cov_statuses.get("freshness", "Fresh"),
+            "last_sync_time": last_sync,
+            "error_info": err_info,
         })
 
     return results

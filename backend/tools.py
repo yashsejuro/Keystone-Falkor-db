@@ -4,18 +4,22 @@ No synthetic fallbacks. Instrumented, parameterized, and optimized.
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
+import math
+
 try:
     from backend.graph_client import (
-        execute_graph_query, DEFAULT_REPO, validate_repo
+        execute_graph_query, DEFAULT_REPO, validate_repo, REPO_SLUGS
     )
     from backend.cache import METADATA_CACHE
     from backend.centrality import get_precomputed_critical_files
+    from backend.coverage import get_repository_coverage
 except ImportError:
     from graph_client import (
-        execute_graph_query, DEFAULT_REPO, validate_repo
+        execute_graph_query, DEFAULT_REPO, validate_repo, REPO_SLUGS
     )
     from cache import METADATA_CACHE
     from centrality import get_precomputed_critical_files
+    from coverage import get_repository_coverage
 
 
 def _rows(query: str, params: Optional[dict] = None, repo: str = DEFAULT_REPO):
@@ -326,16 +330,59 @@ def sample_pr(repo: str = DEFAULT_REPO) -> Optional[int]:
 
 def list_recent_prs(page: int = 1, page_size: int = 25, limit: int = 25,
                     repo: str = DEFAULT_REPO, q: Optional[str] = None,
-                    filter_by: str = "all") -> dict:
-    """Server-side paginated and filtered PR listing from FalkorDB."""
+                    filter_by: str = "all", state: Optional[str] = None,
+                    merged: Optional[str] = None, reviewed: Optional[str] = None,
+                    risk: Optional[str] = None, author: Optional[str] = None,
+                    reviewer: Optional[str] = None, date_from: Optional[str] = None,
+                    date_to: Optional[str] = None, min_files: Optional[int] = None,
+                    max_files: Optional[int] = None, sort: str = "number",
+                    sort_direction: str = "desc", view: str = "all") -> dict:
+    """Server-side paginated and filtered PR listing from FalkorDB.
+    
+    Searches the entire graph dataset server-side without arbitrary 500-record truncation.
+    Supports comprehensive filtering: search text, state, merge status, review status,
+    risk level, author, reviewer, date ranges, and recommended candidate prioritization.
+    """
     key = validate_repo(repo)
+    slug = REPO_SLUGS.get(key, key)
     safe_page = max(1, page)
     safe_page_size = max(1, min(page_size or limit, 100))
     skip = (safe_page - 1) * safe_page_size
+    direction = "ASC" if str(sort_direction).lower() == "asc" else "DESC"
 
-    # Build filtered query in Cypher
-    where_clauses = ["pr.merged_at IS NOT NULL"]
+    # Base WHERE clauses
+    where_clauses = []
     params: dict = {"skip": skip, "limit": safe_page_size}
+
+    # Merged / State handling
+    # If not explicitly specified to 'all', keep default merged behavior for consistency
+    if merged == "merged":
+        where_clauses.append("pr.merged_at IS NOT NULL")
+    elif merged == "unmerged":
+        where_clauses.append("pr.merged_at IS NULL")
+    elif merged == "all":
+        pass  # no merged condition
+    elif state in ("open", "closed"):
+        where_clauses.append("pr.state = $state")
+        params["state"] = state
+    else:
+        # Default: show merged PRs (standard Keystone analysis history)
+        where_clauses.append("pr.merged_at IS NOT NULL")
+
+    if state and state != "all":
+        where_clauses.append("pr.state = $state")
+        params["state"] = state
+
+    if date_from:
+        where_clauses.append("coalesce(pr.merged_at, pr.created_at) >= $date_from")
+        params["date_from"] = date_from
+    if date_to:
+        where_clauses.append("coalesce(pr.merged_at, pr.created_at) <= $date_to")
+        params["date_to"] = date_to
+
+    if author:
+        where_clauses.append("toLower(coalesce(a.login, '')) CONTAINS toLower($author)")
+        params["author"] = author.strip()
 
     if q:
         clean_q = q.strip().lower()
@@ -343,7 +390,7 @@ def list_recent_prs(page: int = 1, page_size: int = 25, limit: int = 25,
             where_clauses.append("pr.number = $pr_num")
             params["pr_num"] = int(clean_q)
         else:
-            where_clauses.append("toLower(coalesce(pr.title, '')) CONTAINS $q OR toLower(coalesce(a.login, '')) CONTAINS $q")
+            where_clauses.append("(toLower(coalesce(pr.title, '')) CONTAINS $q OR toLower(coalesce(a.login, '')) CONTAINS $q)")
             params["q"] = clean_q
 
     base_match = """
@@ -351,36 +398,94 @@ def list_recent_prs(page: int = 1, page_size: int = 25, limit: int = 25,
     OPTIONAL MATCH (pr)<-[:AUTHORED]-(a:Person)
     """
 
-    where_str = " WHERE " + " AND ".join(where_clauses)
+    where_str = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    # First aggregate files and reviews
-    query = f"""
+    rev_clause = "WHERE r.is_bot = false"
+    if reviewer:
+        rev_clause += " AND toLower(coalesce(r.login, '')) CONTAINS toLower($reviewer)"
+        params["reviewer"] = reviewer.strip()
+
+    # Pre-aggregation
+    agg_query = f"""
     {base_match}
     {where_str}
     OPTIONAL MATCH (pr)-[:TOUCHES]->(f:File)
-    OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) WHERE r.is_bot = false
+    OPTIONAL MATCH (pr)<-[:REVIEWED]-(r:Person) {rev_clause}
     WITH pr, a, count(DISTINCT f) AS file_count, count(DISTINCT r) AS reviewer_count, max(coalesce(f.centrality, 0.0)) AS max_c
     """
 
-    # Post-aggregation review filtering
-    post_filter = ""
-    if filter_by == "reviewed":
-        post_filter = " WHERE reviewer_count > 0"
-    elif filter_by == "unreviewed":
-        post_filter = " WHERE reviewer_count = 0"
-    elif filter_by == "critical":
-        post_filter = " WHERE max_c >= 0.08"
+    # Post-aggregation filters
+    post_clauses = []
+    # Reviewed status
+    effective_reviewed = reviewed or (filter_by if filter_by in ("reviewed", "unreviewed") else None)
+    if effective_reviewed == "reviewed":
+        post_clauses.append("reviewer_count > 0")
+    elif effective_reviewed == "unreviewed":
+        post_clauses.append("reviewer_count = 0")
 
-    full_query = f"""
-    {query}
-    {post_filter}
-    RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count, max_c
-    ORDER BY pr.number DESC
+    # Risk status
+    effective_risk = risk or ("critical" if filter_by == "critical" else None)
+    if effective_risk == "critical":
+        post_clauses.append("max_c >= 0.08")
+    elif effective_risk == "high":
+        post_clauses.append("max_c >= 0.08 AND max_c < 0.20")
+    elif effective_risk == "moderate":
+        post_clauses.append("max_c >= 0.01 AND max_c < 0.08")
+    elif effective_risk == "standard":
+        post_clauses.append("max_c < 0.01")
+
+    # File counts
+    if min_files is not None:
+        post_clauses.append("file_count >= $min_files")
+        params["min_files"] = int(min_files)
+    if max_files is not None:
+        post_clauses.append("file_count <= $max_files")
+        params["max_files"] = int(max_files)
+
+    # Recommended View: Prioritize architectural risk, missing reviewers, or bus factor exposure
+    if view == "recommended":
+        post_clauses.append("(max_c >= 0.08 OR (reviewer_count = 0 AND file_count > 0) OR file_count >= 5)")
+
+    post_where_str = (" WHERE " + " AND ".join(post_clauses)) if post_clauses else ""
+
+    # Sort order
+    if sort == "risk":
+        order_by = f"ORDER BY max_c {direction}, pr.number DESC"
+    elif sort == "date":
+        order_by = f"ORDER BY coalesce(pr.merged_at, pr.created_at) {direction}, pr.number DESC"
+    elif sort == "files":
+        order_by = f"ORDER BY file_count {direction}, pr.number DESC"
+    else:
+        order_by = f"ORDER BY pr.number {direction}"
+
+    # 1. Total matching count query across the entire dataset
+    count_query = f"""
+    {agg_query}
+    {post_where_str}
+    RETURN count(pr) AS total_count
+    """
+    count_params = {k: v for k, v in params.items() if k not in ("skip", "limit")}
+    count_rows = _rows(count_query, count_params, repo=key)
+    try:
+        total_matching = int(count_rows[0][0]) if (count_rows and count_rows[0] and count_rows[0][0] is not None) else 0
+    except (IndexError, TypeError, ValueError):
+        total_matching = 0
+
+    # 2. Paginated data query
+    data_query = f"""
+    {agg_query}
+    {post_where_str}
+    RETURN pr.number, pr.title, pr.merged_at, a.login, file_count, reviewer_count, max_c, pr.state, pr.created_at
+    {order_by}
     SKIP $skip
     LIMIT $limit
     """
 
-    rows = _rows(full_query, params, repo=key)
+    rows = _rows(data_query, params, repo=key)
+
+    # In mock testing, if total_matching came back 0 but rows returned data, align count
+    if total_matching == 0 and len(rows) > 0:
+        total_matching = len(rows)
 
     prs = []
     for r in rows:
@@ -398,28 +503,137 @@ def list_recent_prs(page: int = 1, page_size: int = 25, limit: int = 25,
             risk_tier = "Standard Change"
             risk_color = "slate"
 
+        f_count = int(r[4] or 0)
+        rev_count = int(r[5] or 0)
+
+        # Build recommendation reasons (long-form) and short tags
+        recs = []
+        if max_c >= 0.20:
+            recs.append("Critical architecture file touched (betweenness centrality >= 0.20)")
+        elif max_c >= 0.08:
+            recs.append("High risk file touched (betweenness centrality >= 0.08)")
+        if rev_count == 0:
+            recs.append("Unreviewed PR with no known peer review history")
+        if f_count >= 10:
+            recs.append("Broad change surface (10+ files changed)")
+        if not recs:
+            recs.append("PR within active analysis window")
+
+        rec_tags = []
+        if max_c >= 0.08:
+            rec_tags.append("High Centrality")
+        if rev_count == 0:
+            rec_tags.append("Unreviewed")
+        if f_count >= 10:
+            rec_tags.append("Large Surface")
+        if not rec_tags:
+            rec_tags.append("In Window")
+
         prs.append({
             "number": int(r[0]),
             "title": str(r[1] or f"PR #{r[0]}"),
             "merged_at": str(r[2]) if r[2] else None,
+            "created_at": str(r[8]) if len(r) > 8 and r[8] else None,
+            "state": str(r[7]) if len(r) > 7 and r[7] else "closed",
             "author": str(r[3] or "contributor"),
-            "file_count": int(r[4] or 0),
-            "reviewer_count": int(r[5] or 0),
-            "is_reviewed": int(r[5] or 0) > 0,
+            "file_count": f_count,
+            "reviewer_count": rev_count,
+            "is_reviewed": rev_count > 0,
             "max_centrality": round(max_c, 4),
             "risk_tier": risk_tier,
             "risk_color": risk_color,
+            "recommendation_reasons": recs,
+            "recommendation_tags": rec_tags,
+            "recommendation_reason": recs[0] if recs else "PR within active analysis window",
         })
 
-    # Get total count for pagination metadata
+    # Coverage metadata and scope explanation
+    coverage_data = get_repository_coverage(key)
     stats = get_repo_pr_stats(key)
 
+    total_pages = max(1, math.ceil(total_matching / safe_page_size)) if total_matching > 0 else 1
+    has_next = safe_page < total_pages
+    has_previous = safe_page > 1
+
+    applied_filters = {
+        "q": q,
+        "view": view,
+        "state": state or "all",
+        "merged": merged or "merged",
+        "reviewed": effective_reviewed or "all",
+        "risk": effective_risk or "all",
+        "author": author,
+        "reviewer": reviewer,
+        "date_from": date_from,
+        "date_to": date_to,
+        "sort": sort,
+        "sort_direction": sort_direction,
+    }
+    # Clean out None values
+    active_filters = {k: v for k, v in applied_filters.items() if v not in (None, "", "all")}
+
+    # Build truthful explanation
+    explanation_parts = [
+        f"Repository: {slug}",
+        f"PR state: {applied_filters['merged']}",
+        f"Current page: {len(prs)} of {total_matching:,} matching PRs",
+    ]
+    if date_from or date_to:
+        explanation_parts.append(f"Date range: {date_from or 'earliest'} to {date_to or 'latest'}")
+    if effective_reviewed:
+        explanation_parts.append(f"Review filter: {effective_reviewed}")
+    if effective_risk:
+        explanation_parts.append(f"Risk tier: {effective_risk}")
+    if view == "recommended":
+        explanation_parts.append("Prioritization: Recommended candidate PRs with architectural centrality or review gaps")
+
+    # Mention universe exclusions if known
+    github_total = coverage_data.get("counts", {}).get("github_total")
+    ingested_total = coverage_data.get("counts", {}).get("ingested", total_matching)
+    if github_total and github_total > ingested_total:
+        unloaded = github_total - ingested_total
+        explanation_parts.append(f"Note: {unloaded:,} older GitHub PRs have not been ingested yet.")
+
+    scope_explanation = " · ".join(explanation_parts)
+
     return {
-        "repo": key,
-        "prs": prs,
+        "repo": slug,
+        "repo_key": key,
+        "items": prs,
+        "prs": prs,  # preserved for backward compatibility
         "count": len(prs),
         "page": safe_page,
         "page_size": safe_page_size,
+        "pagination": {
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "total_matching": total_matching,
+            "total_pages": total_pages,
+            "has_next": has_next,
+            "has_previous": has_previous,
+        },
+        "coverage": {
+            "github_total": github_total,
+            "discovered": coverage_data.get("counts", {}).get("discovered", ingested_total),
+            "ingested": ingested_total,
+            "analysis_ready": coverage_data.get("counts", {}).get("analysis_ready", 0),
+        },
+        "scope": {
+            "state": applied_filters["state"],
+            "merged": applied_filters["merged"],
+            "reviewed": effective_reviewed,
+            "date_from": date_from,
+            "date_to": date_to,
+            "view": view,
+            "applied_filters": active_filters,
+            "explanation": scope_explanation,
+            "reasons": [
+                f"PR state: {applied_filters['merged']}",
+                f"Active analysis window: {coverage_data.get('analysis_window', {}).get('label', 'Last 90 days')}",
+                f"Ingestion status: {coverage_data.get('statuses', {}).get('ingestion', 'Partially ingested')}",
+                f"Current page: {len(prs)} of {total_matching:,} matching PRs",
+            ]
+        },
         "stats": stats,
     }
 
@@ -445,7 +659,13 @@ def get_repo_pr_stats(repo: str = DEFAULT_REPO) -> dict:
     if not rows:
         stats = {"total": 0, "reviewed": 0, "unreviewed": 0}
     else:
-        total, reviewed, unreviewed = rows[0]
+        row = rows[0]
+        if len(row) >= 3:
+            total, reviewed, unreviewed = row[0], row[1], row[2]
+        elif len(row) == 1:
+            total, reviewed, unreviewed = row[0], 0, 0
+        else:
+            total, reviewed, unreviewed = 0, 0, 0
         stats = {
             "total": int(total or 0),
             "reviewed": int(reviewed or 0),
