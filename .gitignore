@@ -19,6 +19,7 @@ env/
 # editors / OS
 .vscode/
 .idea/
+.vercel/
 .DS_Store
 Thumbs.db
 

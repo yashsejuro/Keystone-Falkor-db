@@ -53,6 +53,7 @@ graph LR
 | Knowledge-risk signals | Centrality and co-change signals for critical files and potential silos. |
 | Repository ingestion | Pull-request and review history loaded into FalkorDB for analysis. |
 | MCP tools | Programmatic reviewer ranking and graph explanations for compatible clients. |
+| Safe Cypher queries | Read-only, bounded graph exploration; mutations, restricted procedures, deep traversals, and oversized results are rejected. |
 | Controlled actions | Auditable `DRY_RUN`, `SHADOW`, and allow-listed `LIVE` execution. |
 
 ## Product walkthrough
