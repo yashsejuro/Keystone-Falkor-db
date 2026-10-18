@@ -70,23 +70,9 @@ class ActionLedgerStore:
 
         # 2. LIVE EXECUTION
         elif clean_mode == "LIVE":
-            if not self.is_write_allowed(repo):
-                entry = {
-                    "id": action_id,
-                    "timestamp": timestamp,
-                    "repo": repo,
-                    "pr_number": pr_number,
-                    "action": action_type,
-                    "target": target,
-                    "reason": reason,
-                    "mode": "FAILED",
-                    "status": "EXECUTION_DENIED",
-                    "destination": f"{repo} PR #{pr_number}",
-                    "safety_notice": f"Repository '{repo}' is not listed in KEYSTONE_WRITE_REPOS.",
-                    "error": "Live execution unauthorized for this repository.",
-                    "idempotency_key": idempotency_key,
-                }
-            elif not confirmed:
+            # Confirmation is deliberately checked first: an unconfirmed action
+            # must never disclose or proceed to repository authorization.
+            if not confirmed:
                 entry = {
                     "id": action_id,
                     "timestamp": timestamp,
@@ -100,6 +86,22 @@ class ActionLedgerStore:
                     "destination": f"{repo} PR #{pr_number}",
                     "safety_notice": "Live actions require explicit confirmation.",
                     "error": "Action was not confirmed for live execution.",
+                    "idempotency_key": idempotency_key,
+                }
+            elif not self.is_write_allowed(repo):
+                entry = {
+                    "id": action_id,
+                    "timestamp": timestamp,
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "action": action_type,
+                    "target": target,
+                    "reason": reason,
+                    "mode": "FAILED",
+                    "status": "EXECUTION_DENIED",
+                    "destination": f"{repo} PR #{pr_number}",
+                    "safety_notice": f"Repository '{repo}' is not listed in KEYSTONE_WRITE_REPOS.",
+                    "error": "Live execution unauthorized for this repository.",
                     "idempotency_key": idempotency_key,
                 }
             else:
