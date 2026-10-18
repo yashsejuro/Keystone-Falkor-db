@@ -19,7 +19,7 @@ import uvicorn
 from backend.graph_client import (
     node_count, edge_count, get_connection_status, get_graph,
     list_repos, DEFAULT_REPO, REPOS, REPO_SLUGS, graph_provenance,
-    validate_repo, is_valid_repo, execute_graph_query, unregister_repo
+    validate_repo, is_valid_repo, execute_graph_query
 )
 from backend.agent import run_keystone, plan
 from backend.tools import (
@@ -172,19 +172,6 @@ async def api_repositories():
         repos = await run_in_threadpool(get_registered_repositories)
         return JSONResponse({"repositories": repos, "count": len(repos)})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@app.delete("/api/repositories/{repo:path}")
-async def api_delete_repository(repo: str, drop_graph: bool = False):
-    """Unregister a repository after usage and optionally delete its FalkorDB graph."""
-    try:
-        res = await run_in_threadpool(unregister_repo, repo, drop_graph)
-        return JSONResponse(res)
-    except ValueError as ve:
-        return JSONResponse({"error": str(ve)}, status_code=400)
-    except Exception as e:
-        logger.error(f"Failed to unregister repository {repo}: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -719,9 +706,28 @@ async def api_action_execute(req: Request):
         action = body.get("action", {})
         repo = body.get("repo", DEFAULT_REPO)
         pr_number = body.get("pr_number") or action.get("on")
-        mode = body.get("mode", "SHADOW")
+        mode = str(body.get("mode", "SHADOW")).upper()
         confirmed = bool(body.get("confirmed", False))
         idempotency_key = body.get("idempotency_key")
+
+        if mode == "LIVE":
+            repo_norm = repo.strip().lower()
+            allowed_repos = [r.strip().lower() for r in ALLOWED_WRITE_REPOS]
+            if not allowed_repos:
+                return JSONResponse(
+                    {"error": "LIVE actions are disabled because KEYSTONE_WRITE_REPOS is empty."},
+                    status_code=403,
+                )
+            if not confirmed:
+                return JSONResponse(
+                    {"error": "Live action requires explicit confirmation before execution."},
+                    status_code=400,
+                )
+            if repo_norm not in allowed_repos:
+                return JSONResponse(
+                    {"error": f"Repository '{repo}' is not authorized for live actions."},
+                    status_code=403,
+                )
 
         entry = await run_in_threadpool(
             ACTION_LEDGER_STORE.record_action,
