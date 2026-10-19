@@ -8,6 +8,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      FALKOR_HOST: ${{ secrets.FALKOR_HOST }}
+      FALKOR_PORT: ${{ secrets.FALKOR_PORT }}
 
     steps:
       - name: Check out code
@@ -23,6 +26,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
+
+      - name: Verify required env vars
+        run: |
+          if [ -z "${FALKOR_HOST:-}" ]; then echo "FALKOR_HOST missing" && exit 1; else echo "FALKOR_HOST set"; fi
+          if [ -z "${FALKOR_PORT:-}" ]; then echo "FALKOR_PORT missing" && exit 1; else echo "FALKOR_PORT set"; fi
 
       - name: Run tests
         run: pytest -q
