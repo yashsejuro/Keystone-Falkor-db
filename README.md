@@ -1,38 +1,23 @@
-# Keystone — Graph-Powered PR Reviewer Routing
+# Keystone — A Graph Helper That Picks PR Reviewers
 
-Keystone recommends the best reviewers for a pull request by traversing a live
-FalkorDB knowledge graph of pull requests, files, authors, reviews, and
-co-change history. Every recommendation is backed by concrete graph evidence,
-not a static ownership file or a hard-coded demo result.
+Keystone helps choose the best person to review a pull request (PR). A PR is a request to add code to a project. A reviewer is a person who checks that code. Keystone uses a live map called a graph in FalkorDB. The map connects PRs, files, authors, reviews, and files that often change together. Every suggestion comes with real reasons from the map. It does not use a fixed list or a fake demo answer.
 
 ![Keystone graph model](assets/graph-overview.png)
 
-## Why we chose this project
+## Why we built this
 
-Review assignment is deceptively high impact: the right reviewer catches risk
-early, while the wrong one creates bottlenecks and leaves knowledge siloed.
-Conventional CODEOWNERS rules describe nominal ownership, but they do not adapt
-to recent review activity, files that change together, or the people who bridge
-critical parts of a codebase. Keystone turns that connected history into a
-transparent recommendation that a developer can inspect and trust.
+Picking a reviewer matters. A good reviewer catches problems early. A bad choice can slow things down and keep knowledge stuck with one person. Normal CODEOWNERS files say who “owns” a file. But they do not know who reviewed recently, which files change together, or who connects important parts of the code. Keystone uses that connected history to give a clear suggestion that a developer can check and trust.
 
-## What makes Keystone different
+## What makes Keystone special
 
-- **Graph-first reasoning:** reviewer ranking is derived from FalkorDB
-  relationships such as `TOUCHES`, `REVIEWED`, and `CO_CHANGES`.
-- **Explainable results:** each candidate includes file overlap, recent-review
-  signals, structural affinity, and an inspectable graph path.
-- **One engine, multiple interfaces:** the web app and FastMCP tools use the
-  same graph-backed ranking and explanation logic.
-- **Safe automation:** Cypher exploration is read-only and bounded; execution
-  supports `DRY_RUN`, `SHADOW`, and explicitly confirmed `LIVE` modes with a
-  repository allow-list.
+- **It uses the graph first:** It ranks reviewers by looking at FalkorDB links like `TOUCHES`, `REVIEWED`, and `CO_CHANGES`. These mean “worked on”, “reviewed”, and “changed together”.
+- **It shows why:** Each person gets a score with shared files, recent reviews, how closely connected they are, and a graph path you can inspect.
+- **One brain, two doors:** The web app and FastMCP tools use the same graph-based ranking and explanation.
+- **It is safe to automate:** Cypher (the graph question language) is read-only and limited. It rejects changes, restricted procedures, deep searches, and huge results. Actions support `DRY_RUN` (pretend), `SHADOW` (watch), and `LIVE` (really do it) only after clear confirmation and only for repos on an allow-list.
 
 ## How it works
 
-Keystone models the engineering history around a pull request as a connected
-graph, then scores each reviewer using shared-file expertise, recent reviews,
-recency, and structural co-change affinity.
+Keystone turns the history around a PR into a connected graph. Then it scores each reviewer using shared-file knowledge, recent reviews, how recent the work is, and how often files change together.
 
 ```mermaid
 graph LR
@@ -44,45 +29,41 @@ graph LR
   Reviewer -->|explains expertise for| File
 ```
 
-## Core capabilities
+## Main things it can do
 
-| Capability | What it provides |
+| Capability | What it gives you |
 | --- | --- |
-| Reviewer routing | Ranked reviewers based on graph evidence rather than a fixed rule. |
-| Explanation paths | Shortest-path evidence that connects a PR, its files, and a reviewer. |
-| Knowledge-risk signals | Centrality and co-change signals for critical files and potential silos. |
-| Repository ingestion | Pull-request and review history loaded into FalkorDB for analysis. |
-| MCP tools | Programmatic reviewer ranking and graph explanations for compatible clients. |
-| Safe Cypher queries | Read-only, bounded graph exploration; mutations, restricted procedures, deep traversals, and oversized results are rejected. |
-| Controlled actions | Auditable `DRY_RUN`, `SHADOW`, and allow-listed `LIVE` execution. |
+| Reviewer routing | Ranks reviewers using graph reasons, not a fixed rule. |
+| Explanation paths | Shows the shortest path linking a PR, its files, and a reviewer. |
+| Knowledge-risk signals | Shows which files are very important and where knowledge may be stuck with one person. |
+| Repository ingestion | Loads PR and review history into FalkorDB. |
+| MCP tools | Lets other compatible tools ask for reviewer rankings and graph explanations. |
+| Safe Cypher queries | Lets people explore the graph read-only and with limits. It rejects changes, restricted procedures, deep searches, and too-large results. |
+| Controlled actions | Auditable `DRY_RUN`, `SHADOW`, and allow-listed `LIVE` actions. |
 
 ## Product walkthrough
 
-### 1. Route a pull request to an explainable reviewer
+### 1. Send a PR to a reviewer and show why
 
-Keystone presents the selected PR, its coverage context, the ranked reviewer,
-and the evidence behind the recommendation in one reviewable workflow.
+Keystone shows the chosen PR, what it covers, the top reviewer, and the reasons behind the pick in one place.
 
 ![Reviewer routing dashboard: a selected pull request, recommended reviewer, score, shared-file evidence, co-change bridges, and recent review activity](assets/Screenshot%202026-10-18%20162727.png)
 
-### 2. Explore the ingested pull-request history
+### 2. Look through the saved PR history
 
-The PR explorer makes scope and exclusions visible while allowing teams to
-search, filter, and prioritise high-risk or under-reviewed changes.
+The PR explorer shows what is included and excluded. Teams can search, filter, and focus on risky or under-reviewed changes.
 
 ![Pull-request explorer with filters, coverage scope, risk tier, review status, and ranked candidate pull requests](assets/Screenshot%202026-10-18%20162811.png)
 
-### 3. Control ingestion and graph freshness
+### 3. Control data loading and graph freshness
 
-Repository health exposes the ingestion scope, progress, review count, and
-centrality-materialisation choice before data is used for routing.
+The repository health page shows what will be loaded, progress, review count, and whether centrality was calculated before routing uses the data.
 
 ![Repository health page showing selectable ingestion scope, progress, graph freshness, and centrality computation](assets/Screenshot%202026-10-18%20162909.png)
 
-### 4. Inspect the underlying FalkorDB graph
+### 4. Look inside the FalkorDB graph
 
-The populated graph contains pull requests, files, people, and their review and
-co-change relationships—the evidence base that powers each recommendation.
+The graph has PRs, files, people, reviews, and files that change together. These are the facts behind each suggestion.
 
 ![FalkorDB graph explorer showing populated nodes and relationships](assets/Screenshot%202026-10-18%20163210.png)
 
@@ -98,7 +79,4 @@ tests/               API, ingestion, scoring, and safety tests
 
 ## Safety notes
 
-Keystone is designed to make its recommendations inspectable before it takes an
-action. Start in `DRY_RUN` or `SHADOW` mode, review the action ledger, and only
-enable `LIVE` actions for repositories you explicitly place in
-`KEYSTONE_WRITE_REPOS`.
+Keystone is made so you can inspect its suggestions before it does anything. Start with `DRY_RUN` or `SHADOW`, check the action ledger, and only turn on `LIVE` actions for repositories you put in `KEYSTONE_WRITE_REPOS`.
