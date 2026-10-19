@@ -11,6 +11,8 @@ jobs:
     env:
       FALKOR_HOST: ${{ secrets.FALKOR_HOST }}
       FALKOR_PORT: ${{ secrets.FALKOR_PORT }}
+      FALKOR_USER: ${{ secrets.FALKOR_USER }}
+      FALKOR_PASS: ${{ secrets.FALKOR_PASS }}
 
     steps:
       - name: Check out code
