@@ -4,7 +4,7 @@ Keystone helps choose the best person to review a pull request (PR). A PR is a r
 
 ![Keystone graph model](assets/graph-overview.png)
 
-## Why we built this
+## Why I built this
 
 Picking a reviewer matters. A good reviewer catches problems early. A bad choice can slow things down and keep knowledge stuck with one person. Normal CODEOWNERS files say who “owns” a file. But they do not know who reviewed recently, which files change together, or who connects important parts of the code. Keystone uses that connected history to give a clear suggestion that a developer can check and trust.
 
